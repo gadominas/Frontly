@@ -160,8 +160,7 @@ module.exports = {
         await h.eval(() => { const s = document.querySelector('#casesheet'), r = document.querySelector('#casesheet .bk').getBoundingClientRect(); s.scrollTop += r.top - 110; });
         await h.wait(400);
       } },
-    { id: '06-patient', label: 'Every patient on file', caption: 'Calls, visits, bookings and notes under one name, found by phone number.', settings: { tab: 'patients' },
-      run: async (h) => { await h.tap('[data-act="openpat"][data-id="p-jonas"]'); await h.wait(600); } },
+    { id: '06-patients', label: 'Every patient on file', caption: 'Grouped by what needs doing, with the next visit, the last call and the history.', settings: { tab: 'patients' } },
     { id: '07-launch', label: 'Launch screen', caption: 'The tooth draws itself, then Answer. Note. Book. Tap to skip.', settle: 1600 },
     { id: '08-settings', label: 'Settings', caption: 'Language, Reva’s voice, how she listens, colours and every limit.',
       run: async (h) => { await h.tap('[data-act="cfgopen"]'); await h.wait(500); } },

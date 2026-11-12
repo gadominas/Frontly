@@ -25,6 +25,7 @@ node ../app-blueprints/testkit/bin/run.js -v 04    # one scenario, every step
 | 05-ai-fallback | Claude fails mid-call: Reva carries on with her script, a toast says so, the note falls back to no AI |
 | 07-no-dictation | Lithuanian with dictation failing as on a real iPhone: the keyboard opens with a plain explanation, dictation isn't retried, and the choice is remembered in settings.json, the Call tab and Settings |
 | 08-transcribe-hands-free | Lithuanian with an OpenAI key and a fake microphone: dictation fails once, the page records, stops on its own when the caller pauses, OpenAI transcribes, Reva answers and the microphone opens again with no tap |
+| 09-patients-list | Patients grouped by status in order, a waiting call's reason and urgency on the card, a booked visit with the dentist, two records on one number flagged, the New filter, grouping by name, the grouping remembered |
 | 06-ai-voice | With OpenAI: the greeting goes to OpenAI speech with Reva's instructions and the iPhone voice stays quiet; Settings shows the AI voice, model, instructions and OpenAI transcription; a silent call is closed, not queued |
 
 ## What the tests don't cover

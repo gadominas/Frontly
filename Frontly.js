@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -224,7 +224,7 @@ const settings = Object.assign(
     checkUpdates: true,   // offer new versions from GitHub (asks again 2 days after "Later")
     lang: "en", sttEngine: "dictation", speechEngine: "ai", handsFree: true,   // the call: language, how Reva hears and speaks
     ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsInstructions: "", voiceURI: "",
-    deskUser: "", tab: "call", callFrom: "",
+    deskUser: "", tab: "call", callFrom: "", patGroup: "status",
     theme: "auto", density: "comfortable", font: "sans", textSize: 1 },
   await load("settings", {})
 );
@@ -822,7 +822,7 @@ function clientState() {
       ai: settings.ai, aiProvider: settings.aiProvider, hasKey: !!aiKey(), hasOpenAI: !!keyFor("openai"), checkUpdates: settings.checkUpdates !== false,
       lang: settings.lang === "lt" ? "lt" : "en", sttEngine: settings.sttEngine || "dictation", speechEngine: settings.speechEngine || "ai", handsFree: settings.handsFree !== false,
       ttsModel: settings.ttsModel || "gpt-4o-mini-tts", ttsVoice: settings.ttsVoice || "coral", ttsInstructions: settings.ttsInstructions || "", ttsDefaultInstr: TTS_DEFAULT_INSTR, voiceURI: settings.voiceURI || "", noDictation: settings.noDictation || {},
-      deskUser: settings.deskUser || "", tab: settings.tab || "call", callFrom: settings.callFrom || "",
+      deskUser: settings.deskUser || "", tab: settings.tab || "call", callFrom: settings.callFrom || "", patGroup: settings.patGroup || "status",
       theme: settings.theme, density: settings.density, font: settings.font, textSize: settings.textSize,
     },
     ttsModels: settings.ttsModels || null, palettes: PALETTES, version: VERSION, nativeShell: NATIVE_SHELL,
@@ -916,7 +916,7 @@ async function handle(m) {
     }
     // ── shared: settings, AI, updates ──
     case "set":
-      if (["theme", "density", "font", "textSize", "checkUpdates", "ai", "lang", "sttEngine", "speechEngine", "handsFree", "ttsVoice", "ttsModel", "ttsInstructions", "voiceURI", "tab", "callFrom"].includes(m.k)) settings[m.k] = m.v;
+      if (["theme", "density", "font", "textSize", "checkUpdates", "ai", "lang", "sttEngine", "speechEngine", "handsFree", "ttsVoice", "ttsModel", "ttsInstructions", "voiceURI", "tab", "callFrom", "patGroup"].includes(m.k)) settings[m.k] = m.v;
       break;
     case "state": return push();
     case "update-later": pendingUpdate = null; snoozeUpdate(); return;   // asked again in 2 days
@@ -1819,13 +1819,75 @@ function clientApp() {
 
   // Patients
   let pq = "", patId = "", patArmed = "";
+  // Each patient's state, from their appointments and calls: what the list groups, filters and shows on the card
+  function patInfo(p) {
+    const now = Date.now(), appts = p.appts || [];
+    const next = appts.filter(a => a.status === "booked" && a.at > now).sort((a, b) => a.at - b.at)[0];
+    const visits = appts.filter(a => a.status === "done" || (a.status === "booked" && a.at <= now)).length;
+    const calls = S.calls.filter(c => c.patientId === p.id).sort((a, b) => b.at - a.at);
+    const waiting = calls.find(c => c.status === "waiting"), last = calls[0];
+    const isNew = !visits && now - (p.since || 0) < 7 * DAY;
+    const tail = digitsOf(p.phone).slice(-8);
+    const shared = tail.length >= 6 ? S.patients.filter(q => q.id !== p.id && digitsOf(q.phone).slice(-8) === tail) : [];
+    const status = waiting ? "tobook" : next ? "booked" : isNew ? "new" : "other";
+    const contact = Math.max(p.since || 0, last ? last.at : 0, ...(p.notes || []).map(n => n.at || 0), ...appts.map(a => a.made || 0));
+    return { next, visits, calls, waiting, last, isNew, shared, status, contact };
+  }
+  const PAT_STATUS = [["tobook", "To book"], ["booked", "Visit booked"], ["new", "New patients"], ["other", "Everyone else"]];
+  const PAT_FILTERS = [["all", "All"], ["tobook", "To book"], ["booked", "Booked"], ["new", "New"]];
+  let patFilter = "all";
+  function patCard(p, x) {
+    const d = x.next && docOf(x.next.doctor), w = x.waiting, ws = w && (w.summary || {});
+    const line = w ? `<span>${esc(ws.reason || (w.fields || {}).complaint || "Call back")} · called ${esc(rel(w.at))}</span>`
+      : x.next ? `<span class="pc-ic" aria-hidden="true">📅</span><span><b>${esc(dayLabel(x.next.at))}, ${hhmm(x.next.at)}</b> · ${esc(d ? d.short : "")} · ${esc(x.next.reason || "")}</span>`
+      : x.last ? `<span>Called ${esc(rel(x.last.at))} · ${esc(((x.last.summary || {}).reason) || "Call")}</span>`
+      : `<span class="muted">No calls yet</span>`;
+    const chips = [
+      x.isNew ? `<span class="pill">New patient</span>` : "",
+      x.visits ? `<span class="pill soft">${x.visits} visit${x.visits === 1 ? "" : "s"}</span>` : "",
+      x.calls.length ? `<span class="pill soft">${x.calls.length} call${x.calls.length === 1 ? "" : "s"}</span>` : "",
+      (p.notes || []).length ? `<span class="pill soft">${p.notes.length} note${p.notes.length === 1 ? "" : "s"}</span>` : "",
+      x.last && x.last.mood ? `<span class="pill soft">${S.moods[x.last.mood.label] || ""} ${esc(x.last.mood.label)}</span>` : "",
+      x.shared.length ? `<span class="pill warn">Same number as ${esc(x.shared.map(q => q.name.split(" ")[0]).join(", "))}</span>` : "",
+    ].join("");
+    return `<button class="pcard st-${x.status}" data-act="openpat" data-id="${esc(p.id)}">
+      <span class="av ring">${esc(initials(p.name))}</span>
+      <span class="grow">
+        <span class="pc-top"><b>${esc(p.name)}</b>${p.age ? `<small>${esc(p.age)}</small>` : ""}${w ? `<span class="pc-tri">${triagePill(ws.triage)}</span>` : ""}</span>
+        <small class="pc-ph">${esc(p.phone)}</small>
+        <span class="pc-line">${line}</span>
+        ${chips ? `<span class="chips">${chips}</span>` : ""}
+      </span><span class="chev" aria-hidden="true">›</span></button>`;
+  }
   function patientsHTML() {
-    const q = pq.trim().toLowerCase();
-    const list = S.patients.filter(p => !q || (p.name + " " + p.phone).toLowerCase().includes(q) || digitsOf(p.phone).includes(digitsOf(q)) && digitsOf(q).length > 2).sort((a, b) => a.name.localeCompare(b.name));
-    const next = p => (p.appts || []).filter(a => a.status === "booked" && a.at > Date.now()).sort((a, b) => a.at - b.at)[0];
-    return `<div class="search"><input id="pq" type="search" placeholder="Name or phone number" autocomplete="off" aria-label="Find a patient"></div>
-      ${list.length ? list.map(p => { const n = next(p), lc = S.calls.find(c => c.patientId === p.id); return `<button class="crow" data-act="openpat" data-id="${esc(p.id)}"><span class="av">${esc(initials(p.name))}</span><span class="grow"><b>${esc(p.name)}</b><small>${p.age ? esc(p.age) + " · " : ""}${esc(p.phone)}${n ? ` · next ${esc(dayLabel(n.at))} ${hhmm(n.at)}` : lc ? ` · called ${esc(rel(lc.at))}` : ""}</small></span><span class="chev">›</span></button>`; }).join("")
-        : `<div class="empty"><h2>No one found</h2><p>${q ? "Try another name or number." : "Patients appear here after their first call."}</p></div>`}`;
+    const q = pq.trim().toLowerCase(), qd = digitsOf(q), grp = S.settings.patGroup || "status";
+    const all = S.patients.map(p => ({ p, x: patInfo(p) }));
+    const inF = (f, x) => f === "all" || (f === "new" ? x.isNew : x.status === f);   // New is a filter of its own: a new patient can also wait to be booked
+    const count = f => all.filter(r => inF(f, r.x)).length;
+    const list = all.filter(({ p, x }) => inF(patFilter, x) &&
+      (!q || (p.name + " " + p.phone).toLowerCase().includes(q) || (qd.length > 2 && digitsOf(p.phone).includes(qd))));
+    let groups;
+    if (grp === "az") {
+      list.sort((a, b) => a.p.name.localeCompare(b.p.name));
+      groups = [];
+      list.forEach(r => { const k = r.p.name.charAt(0).toUpperCase(); const g = groups.find(x => x.k === k); g ? g.rows.push(r) : groups.push({ k, title: k, rows: [r] }); });
+    } else if (grp === "recent") {
+      list.sort((a, b) => b.x.contact - a.x.contact);
+      const d0 = sod(Date.now()), when = t => t >= d0 ? "Today" : t >= d0 - 6 * DAY ? "This week" : t >= d0 - 30 * DAY ? "This month" : "Earlier";
+      groups = ["Today", "This week", "This month", "Earlier"].map(k => ({ k, title: k, rows: list.filter(r => when(r.x.contact) === k) }));
+    } else {
+      const by = { tobook: (a, b) => ((b.x.waiting.summary || {}).priority || 0) - ((a.x.waiting.summary || {}).priority || 0) || a.x.waiting.at - b.x.waiting.at,
+        booked: (a, b) => a.x.next.at - b.x.next.at, new: (a, b) => b.p.since - a.p.since, other: (a, b) => a.p.name.localeCompare(b.p.name) };
+      groups = PAT_STATUS.map(([k, title]) => ({ k, title, rows: list.filter(r => r.x.status === k).sort(by[k]) }));
+    }
+    groups = groups.filter(g => g.rows.length);
+    return `<div class="ptools">
+        <div class="search"><input id="pq" type="search" placeholder="Name or phone number" autocomplete="off" aria-label="Find a patient"></div>
+        <div class="seg wide" role="tablist" aria-label="Show">${PAT_FILTERS.map(([v, l]) => `<button class="${patFilter === v ? "on" : ""}" data-act="pfilter" data-v="${v}" aria-pressed="${patFilter === v}">${l} <i>${count(v)}</i></button>`).join("")}</div>
+        <div class="pgroup"><span>Group by</span>${[["status", "Status"], ["recent", "Last contact"], ["az", "Name"]].map(([v, l]) => `<button class="chip ${grp === v ? "on" : ""}" data-act="pgroup" data-v="${v}" aria-pressed="${grp === v}">${l}</button>`).join("")}</div>
+      </div>
+      ${groups.length ? `<div class="plist">${groups.map(g => `<section class="pgrp" aria-label="${esc(g.title)}"><h3 class="pgrp-h">${esc(g.title)}<i>${g.rows.length}</i></h3>${g.rows.map(r => patCard(r.p, r.x)).join("")}</section>`).join("")}</div>`
+        : `<div class="empty"><h2>No one found</h2><p>${q ? "Try another name or number." : patFilter !== "all" ? "Nobody in this group right now." : "Patients appear here after their first call."}</p>${patFilter !== "all" ? `<button class="primary" data-act="pfilter" data-v="all">Show everyone</button>` : ""}</div>`}`;
   }
   const digitsOf = s => String(s || "").replace(/\D/g, "");
   function renderPat() {
@@ -1941,6 +2003,8 @@ function clientApp() {
       case "addnote": { const ta = $("#casenote"), c = byCall(id); if (ta && ta.value.trim() && c) { send("note", { call: id, patient: c.patientId, text: ta.value }); ta.value = ""; } break; }
       case "openpat": patId = id; patArmed = ""; renderPat(); $("#patsheet").scrollTop = 0; break;
       case "patclose": patId = ""; renderPat(); break;
+      case "pfilter": patFilter = v; render(); break;
+      case "pgroup": S.settings.patGroup = v; send("set", { k: "patGroup", v }); render(); break;
       case "patnote": { const ta = $("#patnote"); if (ta && ta.value.trim()) { send("note", { patient: id, text: ta.value }); ta.value = ""; } break; }
       // settings
       case "upd-now": updNow(t); break;
@@ -2179,8 +2243,33 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .empty p{max-width:34ch;margin:0 auto 20px}
 .search{max-width:640px;margin:0 auto;padding:16px 20px 4px}
 .search input{width:100%;font:16px var(--sans);padding:11px 13px;border-radius:12px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink)}
-#list>.crow{max-width:600px;margin:0 auto;padding-left:20px;padding-right:20px;width:auto}
-@media (min-width:640px){#list>.crow{margin:0 auto}}
+.ptools{max-width:680px;margin:0 auto;padding:14px 16px 0}
+.ptools .search{padding:0 0 10px}
+.ptools .seg button i{font-style:normal;opacity:.65;margin-left:2px}
+.pgroup{display:flex;align-items:center;gap:6px;margin:10px 0 0;overflow-x:auto;scrollbar-width:none}
+.pgroup::-webkit-scrollbar{display:none}
+.pgroup span{font-size:calc(13px * var(--ts));color:var(--muted);margin-right:2px;white-space:nowrap}
+.chip{white-space:nowrap;font-size:calc(13.5px * var(--ts));padding:5px 12px;border-radius:15px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink-2)}
+.chip.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.plist{max-width:680px;margin:0 auto;padding:4px 14px 0}
+.pgrp-h{display:flex;align-items:baseline;gap:8px;font:700 calc(15px * var(--ts))/1.2 var(--display);color:var(--ink-2);margin:20px 4px 8px}
+.pgrp-h i{font-style:normal;font-weight:600;font-size:calc(12.5px * var(--ts));color:var(--muted)}
+.pcard{display:flex;align-items:flex-start;gap:12px;width:100%;text-align:left;background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:var(--pad) 12px var(--pad) 14px;margin-bottom:var(--gap)}
+.pcard .grow b{display:inline;white-space:normal}
+.pcard .chev{align-self:center}
+.pc-top{display:flex;align-items:baseline;gap:8px}
+.pc-tri{margin-left:auto;flex:none;align-self:center}
+.pc-top b{font:700 calc(17px * var(--ts))/1.25 var(--display)}
+.pc-top small{font-size:calc(13.5px * var(--ts));color:var(--muted)}
+.grow small.pc-ph{color:var(--muted);font-variant-numeric:tabular-nums}
+.pc-line{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-top:6px;font-size:calc(14px * var(--ts));color:var(--ink-2)}
+.pc-line b{display:inline;font-weight:650;color:var(--ink)}
+.pcard .chips{margin-top:8px}
+.av.ring{border-width:2px}
+.pcard.st-tobook .av.ring{border-color:var(--amber);color:var(--amber)}
+.pcard.st-booked .av.ring{border-color:var(--signal);color:var(--signal)}
+.pcard.st-new .av.ring{border-style:dashed}
+.pill.warn{color:var(--amber);border-color:var(--amber);background:var(--amber-wash)}
 
 /* ── Front desk ── */
 .desk-in .pin{width:100%;font:700 22px/1 var(--rounded);letter-spacing:.4em;text-align:center;padding:12px;border-radius:12px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink)}

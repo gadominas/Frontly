@@ -27,7 +27,7 @@ Call the clinic. Answer Reva. Book the visit.
 ## See it in action
 
 <p align="center">
-  <img src="docs/media/wall.gif" width="100%" alt="Frontly's screens in turn: the Call tab, a live call with Reva's notes filling in, the note at the end of the call, the front desk queue, booking a dentist and a patient's record">
+  <img src="docs/media/wall.gif" width="100%" alt="Frontly's screens in turn: the Call tab, a live call with Reva's notes filling in, the note at the end of the call, the front desk queue, booking a dentist and the patients list">
 </p>
 
 ## Screenshots
@@ -40,7 +40,7 @@ Call the clinic. Answer Reva. Book the visit.
 <p align="center">
   <img src="docs/screenshots/04-front-desk.png" width="31%" alt="The front desk queue, signed in as the receptionist: an urgent call first, then two calls marked Soon, each with pain, urgency, mood and the best time">
   <img src="docs/screenshots/05-book.png" width="31%" alt="Booking a child's appointment: the suggested dentist, ten days to choose from, free times with the one the caller asked for marked, and a Book button">
-  <img src="docs/screenshots/06-patient.png" width="31%" alt="Jonas Petrauskas's record: phone, age, a check-up coming up, his calls, past visits and a receptionist's note">
+  <img src="docs/screenshots/06-patients.png" width="31%" alt="Patients grouped by status: three callers to book, each card with age, phone, urgency, why they called, visits, calls and mood">
 </p>
 <p align="center">
   <img src="docs/screenshots/07-launch.png" width="31%" alt="The launch screen: a white tooth outline between two sound marks, a teal voice line and a pink dot, above Frontly and Answer. Note. Book.">
@@ -64,7 +64,7 @@ Call the clinic. Answer Reva. Book the visit.
 - **Known callers are recognised.** A caller's phone number finds their patient record, so Reva greets them by name and skips what she already knows. A new caller gets a record of their own.
 - **A note ready to book.** When the call ends, Reva writes a summary for the front desk: how urgent it is, red flags, the right kind of dentist, a suggested dentist and when the caller can come.
 - **Be the receptionist.** Sign in to the front desk, work the queue most urgent first, open a call, pick the dentist and a free time and book it. Copy a confirmation text, cancel, or close a call without booking.
-- **Every patient on file.** Calls, visits, bookings and notes under one name, found by name or number.
+- **Every patient on file.** Grouped by what needs doing (to book, visit booked, new, everyone else), by last contact or by name, with filters and search. Each card shows the next visit or the open call, visits, calls, notes, mood, and a warning when two records share a number.
 - **English or Lithuanian.** Reva holds the call in either language.
 - **AI is optional.** Without a key Reva follows a fixed script, labelled no AI. With a Claude or OpenAI key she holds a real conversation, reads the caller's mood and writes the note; with an OpenAI key she can also speak with an AI voice and have callers transcribed.
 - **Widget, launch screen, Settings and updates** from the shared blueprints: a Home Screen widget with the calls waiting, a branded launch screen, one Settings sheet and new versions offered in the app.
