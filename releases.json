@@ -4,6 +4,37 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.1.2",
+      "date": "2026-11-12",
+      "title": "The caller's language from the first word",
+      "highlights": [
+        {
+          "icon": "🌍",
+          "title": "Language by phone number",
+          "text": "A +370 number hears Reva in Lithuanian, a +371 number in Latvian and any other country in English, from her very first word."
+        },
+        {
+          "icon": "👋",
+          "title": "Greetings in three languages",
+          "text": "Reva's opening, including \"Ar tai Jonas?\" for a known patient, now comes in Lithuanian, Latvian or English."
+        },
+        {
+          "icon": "📋",
+          "title": "Updated instructions",
+          "text": "Copy Reva's instructions again from Settings › Phone line: they now start in the caller's language and switch if the caller answers in another."
+        }
+      ],
+      "changes": [
+        "bridge: the call-start answer picks the language from the caller's country code, then the number dialled, then LANGUAGE; it sends the agent-language override and a {{call_language}} variable",
+        "bridge: a Latvian opening line; Twilio's stand-in numbers for hidden callers are recognised; LANGUAGE_OVERRIDE=off for agents with the override switched off",
+        "Reva's instructions (Settings › Phone line › Copy) use {{call_language}} instead of a fixed Lithuanian-or-English rule",
+        "Tests: 16 of 16 with the testkit; node bridge/test.mjs 14 checks (Latvian, foreign and hidden callers, the override switch)"
+      ],
+      "fixes": [
+        "Calls always started in the agent's default language, whatever number called"
+      ]
+    },
+    {
       "version": "1.1.1",
       "date": "2026-11-12",
       "title": "Notes that fit the screen",

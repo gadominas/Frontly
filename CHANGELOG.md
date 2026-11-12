@@ -2,6 +2,23 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.1.2 (2026-11-12): The caller's language from the first word
+
+- 🌍 **Language by phone number**: A +370 number hears Reva in Lithuanian, a +371 number in Latvian and any other country in English, from her very first word.
+- 👋 **Greetings in three languages**: Reva's opening, including "Ar tai Jonas?" for a known patient, now comes in Lithuanian, Latvian or English.
+- 📋 **Updated instructions**: Copy Reva's instructions again from Settings › Phone line: they now start in the caller's language and switch if the caller answers in another.
+
+**Changes**
+
+- bridge: the call-start answer picks the language from the caller's country code, then the number dialled, then LANGUAGE; it sends the agent-language override and a {{call_language}} variable
+- bridge: a Latvian opening line; Twilio's stand-in numbers for hidden callers are recognised; LANGUAGE_OVERRIDE=off for agents with the override switched off
+- Reva's instructions (Settings › Phone line › Copy) use {{call_language}} instead of a fixed Lithuanian-or-English rule
+- Tests: 16 of 16 with the testkit; node bridge/test.mjs 14 checks (Latvian, foreign and hidden callers, the override switch)
+
+**Fixes**
+
+- Calls always started in the agent's default language, whatever number called
+
 ## 1.1.1 (2026-11-12): Notes that fit the screen
 
 - 📐 **Long warnings wrap**: A long warning or label in a call note now wraps onto the next line inside the card instead of running off the screen.
