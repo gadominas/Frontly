@@ -2,6 +2,26 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.4.0 (2026-11-13): Your clinic, your dentists
+
+- 🧑‍⚕️ **Add your dentists**: Settings › Dentists: add each dentist with their role, what they do, their days and hours. Bookings, suggestions and the calendar use them.
+- 🧹 **No made-up data**: No invented patients fill the diary any more, and the demo patients are gone: the calendar and the front desk show only your calls and bookings.
+- ◀️ **Better calendar buttons**: Round buttons with clear arrows step through days, weeks and months, and Back to today brings you home.
+
+**Changes**
+
+- Settings › Dentists: add, edit and remove; a dentist with visits booked can't be removed, one with only past visits is hidden so the history still names them
+- An install that already booked with the five sample dentists keeps them, now editable; a new install starts with none and points to Settings › Dentists
+- The made-up patients that filled the diary are gone, and so is Settings › Booking › Demo: slots already taken; the calendar counts only bookings
+- The three demo patients and their call are removed once; real phone calls stay, and a demo record a real call was filed under keeps that call and its booking
+- Settings › Demo › Start the demo again becomes Settings › Data › Remove all calls and patients
+- Trends say so when there is nothing to show yet
+- Tests: 13-dentists, 14-no-demo-data (20 of 20 with the testkit); node bridge/test.mjs 14 checks
+
+**Fixes**
+
+- The calendar's arrow buttons were small and their arrows sat off-centre
+
 ## 1.3.0 (2026-11-12): Smarter booking, and the clinic at a glance
 
 - 🗓️ **Calendar**: A new tab shows how full the clinic is: each dentist's day, the week and the month as percent taken, and trends with the busiest days and dentists.

@@ -4,6 +4,40 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.4.0",
+      "date": "2026-11-13",
+      "title": "Your clinic, your dentists",
+      "highlights": [
+        {
+          "icon": "🧑‍⚕️",
+          "title": "Add your dentists",
+          "text": "Settings › Dentists: add each dentist with their role, what they do, their days and hours. Bookings, suggestions and the calendar use them."
+        },
+        {
+          "icon": "🧹",
+          "title": "No made-up data",
+          "text": "No invented patients fill the diary any more, and the demo patients are gone: the calendar and the front desk show only your calls and bookings."
+        },
+        {
+          "icon": "◀️",
+          "title": "Better calendar buttons",
+          "text": "Round buttons with clear arrows step through days, weeks and months, and Back to today brings you home."
+        }
+      ],
+      "changes": [
+        "Settings › Dentists: add, edit and remove; a dentist with visits booked can't be removed, one with only past visits is hidden so the history still names them",
+        "An install that already booked with the five sample dentists keeps them, now editable; a new install starts with none and points to Settings › Dentists",
+        "The made-up patients that filled the diary are gone, and so is Settings › Booking › Demo: slots already taken; the calendar counts only bookings",
+        "The three demo patients and their call are removed once; real phone calls stay, and a demo record a real call was filed under keeps that call and its booking",
+        "Settings › Demo › Start the demo again becomes Settings › Data › Remove all calls and patients",
+        "Trends say so when there is nothing to show yet",
+        "Tests: 13-dentists, 14-no-demo-data (20 of 20 with the testkit); node bridge/test.mjs 14 checks"
+      ],
+      "fixes": [
+        "The calendar's arrow buttons were small and their arrows sat off-centre"
+      ]
+    },
+    {
       "version": "1.3.0",
       "date": "2026-11-12",
       "title": "Smarter booking, and the clinic at a glance",
