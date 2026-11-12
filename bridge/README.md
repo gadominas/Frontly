@@ -48,9 +48,9 @@ With the command line instead: `npx wrangler kv namespace create FRONTLY`, put i
 2. **System prompt**: in Frontly, **Settings › Phone line › Reva's instructions › Copy**, and paste.
 3. **First message**: `{{opening}}` (the bridge fills it in, in the caller's language: "Ar tai Jonas?" for a known number, a name question for anyone else).
 4. **Language**: English, Lithuanian and Latvian, with **language detection** on; check that the voice speaks all three well. In **Security › Overrides**, turn on **Agent language**: the bridge then starts each call in the caller's language (+370 Lithuanian, +371 Latvian, other countries English), voice and speech recognition included.
-5. **Dynamic variables**: give each a default, used when you test in the browser: `opening` = `Hello, this is Reva at Northlight Dental. May I have your name?`, `patient_known` = `no`, `call_language` = `Lithuanian`, and `patient_name`, `patient_age`, `patient_history`, `caller_number` empty.
+5. **Dynamic variables**: give each a default, used when you test in the browser: `opening` = `Hello, this is Reva at Northlight Dental. May I have your name?`, `patient_known` = `no`, `call_language` = `Lithuanian`, `patient_appointments`, `patient_waiting` and `patient_message` = `none`, and `patient_name`, `patient_age`, `patient_history`, `caller_number` empty.
 6. **Tools**: turn on **End call**.
-7. **Analysis › Data collection**: add these ten, with exactly these identifiers (the bridge reads them by name):
+7. **Analysis › Data collection**: add these twelve, with exactly these identifiers (the bridge reads them by name):
 
 | Identifier | Type | Description |
 | --- | --- | --- |
@@ -63,7 +63,9 @@ With the command line instead: `npx wrangler kv namespace create FRONTLY`, put i
 | `preferred` | String | The best time for a visit |
 | `notes` | String | Anything else: swelling, fever, bleeding, medicines, allergies |
 | `mood` | String | One word: calm, cheerful, worried, anxious, in pain, frustrated, upset or unsure |
-| `language` | String | `lt` or `en`, the language of the call |
+| `language` | String | `lt`, `lv` or `en`, the language of the call |
+| `intent` | String | Why they called, exactly one of: `new_visit` (a new problem or a new visit), `about_visit` (a question about a visit already booked, such as when or with whom), `change_visit` (move or cancel a booked visit), `other` |
+| `message_passed` | Boolean | True only if the receptionist passed on the front desk's message and the caller heard it |
 
 8. **Agents › Settings** (the workspace):
    - **Post-call webhook**: create one with URL `https://frontly-bridge.<…>.workers.dev/elevenlabs/webhook`, authentication **HMAC**. Copy the secret it shows into Cloudflare as `EL_WEBHOOK_SECRET`. Turn on retries.
@@ -99,3 +101,10 @@ Calls go through Twilio and ElevenLabs, and the transcript and collected details
 | A call arrives without details | The data collection identifiers in step 3.7, spelled exactly |
 
 Tests: `node bridge/test.mjs` (Node 22) checks the lookup, the signature, replays, retries and the mapping.
+
+## What Reva knows, and what reaches the front desk
+
+Frontly sends the bridge a short brief for each patient: name, age, number, the last visit, the **booked visits** (day, time, dentist), a **request still waiting** for the front desk, and a **message** the front desk wrote on the patient's page. Reva can tell a patient when their visit is and with whom, say the front desk already has their request, and pass the message on.
+
+Each call comes back with its purpose (`intent`). Only booking work goes to **To book**: a new visit, or a change to a booked one. A question about a booked visit goes to **Other**, filed under the patient. A patient who calls again while a request waits is added to that request (it shows "Called 2×"), not queued twice. A message is marked passed on when `message_passed` is true for that call; until then Reva keeps it for the next call.
+

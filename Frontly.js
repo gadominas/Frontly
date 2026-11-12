@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.1.2';
+const VERSION = '1.2.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -164,6 +164,8 @@ const DESK_STAFF = ["Agnė Petrauskaitė", "Mantas Jonaitis"];
 const DEMO_PIN = "1234";
 const MOODS = { calm: "🙂", cheerful: "😊", worried: "😟", anxious: "😰", "in pain": "😣", frustrated: "😤", upset: "😢", unsure: "😐" };
 const TRIAGE = ["emergency", "urgent", "soon", "routine"];
+// Why someone phoned. Only new_visit and change_visit are booking work; the others are filed under the patient.
+const INTENTS = ["new_visit", "about_visit", "change_visit", "other"];
 
 // ---------- storage ----------
 // Stability patterns (app-blueprints · stability-patterns 1.0.2): iCloud only when this script itself lives in iCloud Drive.
@@ -746,6 +748,7 @@ async function aiSummary(c) {
       specialty: "one specialty id", doctor: "the best dentist id", flags: ["red flags such as swelling, fever, bleeding, trauma; empty if none"],
       hint: "a booking suggestion in at most 12 words", mood: { label: "calm|cheerful|worried|anxious|in pain|frustrated|upset|unsure", score: "-2 to 2", note: "at most 8 words on how the caller sounded" },
       fields: "the details object, corrected from the call, in English",
+      intent: "why they called: new_visit (a new problem or a new visit), about_visit (a question about a visit already booked, such as when or with whom), change_visit (move or cancel a booked visit) or other",
     },
   });
   const j = parseJSON(await aiCall(sys, user, 900, "summary", c.provider || settings.aiProvider));
@@ -757,7 +760,7 @@ async function aiSummary(c) {
     triage, priority: Math.max(1, Math.min(5, Math.round(Number(j.priority) || PRIORITY[triage]))),
     specialty: SPECIALTIES[j.specialty] ? j.specialty : tpl.specialty, doctor: docById(j.doctor) ? j.doctor : tpl.doctor,
     reason: String(j.reason || tpl.reason).slice(0, 60), flags: Array.isArray(j.flags) ? j.flags.map(String).slice(0, 5) : tpl.flags,
-    hint: String(j.hint || tpl.hint).slice(0, 100), mood: cleanMood(j.mood),
+    hint: String(j.hint || tpl.hint).slice(0, 100), mood: cleanMood(j.mood), intent: INTENTS.includes(j.intent) ? j.intent : "",
   };
 }
 // The call ends: link it to the patient (a new caller gets a record), write the note, keep it for the front desk.
@@ -812,8 +815,21 @@ function patientsBrief() {
     const next = (p.appts || []).filter(a => a.status === "booked" && a.at > Date.now()).sort((a, b) => a.at - b.at)[0];
     const d = x => new Date(x.at).toISOString().slice(0, 10);
     const history = [last ? `Last visit ${d(last)}: ${last.reason}` : "", next ? `Booked ${d(next)}: ${next.reason}` : ""].filter(Boolean).join(". ");
-    return { name: p.name, age: p.age || null, phone: p.phone, history };
+    const when = t => new Date(t).toLocaleString("en-GB", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+    const appointments = (p.appts || []).filter(a => a.status === "booked" && a.at > Date.now()).sort((a, b) => a.at - b.at)
+      .map(a => { const doc = docById(a.doctor) || {}; return `${when(a.at)} with ${doc.name || "a dentist"}${doc.role ? " (" + doc.role + ")" : ""}: ${a.reason || "visit"}`; }).join("; ");
+    const w = calls.find(c => c.patientId === p.id && c.status === "waiting");
+    const waiting = w ? `${(w.summary || {}).reason || (w.fields || {}).complaint || "a request"}, from ${when(w.at)}; the front desk will call back to book it` : "";
+    return { name: p.name, age: p.age || null, phone: p.phone, history, appointments, waiting, message: p.message ? p.message.text : "", messageId: p.message ? p.message.id : "" };
   });
+}
+// Without an AI key or the agent's "intent", a guess from the call: questions about a booked visit vs. booking work
+function guessIntent(c, pt) {
+  const said = c.transcript.filter(x => x.who === "caller").map(x => x.t).join(" ");
+  const booked = pt && (pt.appts || []).some(a => a.status === "booked" && a.at > Date.now());
+  if (booked && /(cancel|reschedul|move (it|my)|another (day|time)|atšauk|perkel|pakeist)/i.test(said)) return "change_visit";
+  if (booked && c.fields.pain == null && /(when|what time|which (doctor|dentist)|who (is|am)|kada|kelint|kokiu laiku|kuris|kuri gydytoj|pie kuri)/i.test(said)) return "about_visit";
+  return "new_visit";
 }
 // One call from the bridge → a call at the front desk, filed under the caller's record, with Frontly's own note.
 async function importPhoneCall(r) {
@@ -841,8 +857,26 @@ async function importPhoneCall(r) {
   if (!summary) { summary = templateSummary(c); if (r.summary) { summary.text = String(r.summary).slice(0, 700); summary.kind = "ai"; summary.provider = c.provider; } }
   if (summary.mood && !c.mood) c.mood = summary.mood;
   delete summary.mood;
+  c.intent = summary.intent || (INTENTS.includes(r.intent) ? r.intent : "") || guessIntent(c, pt);
+  delete summary.intent;
   c.summary = summary;
+  // Only booking work waits at the front desk. A question is filed under the patient; a patient calling again about
+  // a request that already waits is added to that request instead of queueing twice.
+  const waiting = pt && calls.find(x => x.patientId === pt.id && x.status === "waiting");
   if (!c.transcript.some(x => x.who === "caller")) c.status = "closed";   // nobody spoke
+  else if (c.intent === "about_visit" || c.intent === "other") c.status = "noted";
+  else if (waiting) {
+    c.status = "noted"; c.followUp = waiting.id;
+    (waiting.again = waiting.again || []).push(c.id);
+    const ws = waiting.summary || (waiting.summary = {});
+    if ((summary.priority || 0) > (ws.priority || 0)) { ws.priority = summary.priority; ws.triage = summary.triage; }
+    ws.flags = [...new Set([...(ws.flags || []), ...(summary.flags || [])])].slice(0, 5);
+  }
+  // The front desk's message for this patient: delivered when the agent says it passed it on (data collection "message_passed")
+  if (pt && pt.message && r.messagePassed === true && (!r.messageId || r.messageId === pt.message.id)) {
+    const m = Object.assign({}, pt.message, { delivered: c.at, callId: c.id });
+    (pt.messages = pt.messages || []).unshift(m); pt.message = null; c.delivered = m.text;
+  }
   calls.unshift(c);
   if (calls.length > 300) calls.length = 300;
   return c;
@@ -876,12 +910,24 @@ async function syncLine(manual) {
 // Reva's instructions for the ElevenLabs agent, with the variables the bridge fills in when a call starts.
 const PHONE_PROMPT = () => `You are ${cfg("assistantName")}, the virtual receptionist of ${cfg("clinicName")}, a dental clinic in Vilnius, Lithuania. You answer real phone calls.
 Start in {{call_language}}: the bridge picks it from the caller's number (+370 Lithuanian, +371 Latvian, other countries English). If the caller answers in another of these three languages, switch to theirs. Keep every reply short: one or two spoken sentences, one question at a time.
-Collect for the front desk: the caller's full name, their age, the reason for the call, where it hurts (which tooth or side), the pain from 0 to 10, how urgent it feels to the caller from 1 (it can wait) to 5 (needs help today), the best time for a visit, and anything else that matters (swelling, fever, bleeding, medicines, allergies, pregnancy, a child as the patient).
+
+What you know about the caller:
 Known patient: {{patient_known}}. Name: {{patient_name}}. Age: {{patient_age}}. History: {{patient_history}}.
-If the patient is known, confirm it's them by first name, don't ask for their name or age again, and use their history when it helps.
-Be warm and empathetic and acknowledge pain, but stay brief. Never diagnose, never give treatment advice and never promise an exact appointment time: the front desk will call back to confirm.
+Booked visits: {{patient_appointments}}.
+A request waiting for the front desk: {{patient_waiting}}.
+A message from the front desk for this patient: {{patient_message}}.
+If the patient is known, confirm it's them by first name and don't ask for their name or age again.
+
+Find out first why they are calling, then do only what that needs:
+1. A question about a visit already booked (when, what time, which dentist): answer from Booked visits: the day, the time and the dentist's name. Don't collect symptoms.
+2. To move or cancel a booked visit: ask which visit and what they would like instead. You can't change bookings yourself: the front desk will call back.
+3. A new problem or a new visit: collect the reason for the call, where it hurts (which tooth or side), the pain from 0 to 10, how urgent it feels to the caller from 1 (it can wait) to 5 (needs help today), the best time for a visit, and anything else that matters (swelling, fever, bleeding, medicines, allergies, pregnancy, a child as the patient). A new caller also gives their full name and age.
+If a request is already waiting, tell them the front desk has it and will call back, and add anything new they tell you.
+If there is a message from the front desk (not "none"), pass it on once you know you're speaking with the patient, in the caller's language, and make sure they understood it.
+
+Be warm and empathetic and acknowledge pain, but stay brief. Never diagnose, never give treatment advice and never promise an exact time for a new visit: the front desk will call back to confirm.
 If the caller mentions trouble breathing or swallowing, swelling spreading towards the eye or neck, bleeding that won't stop or a serious injury, tell them to call 112 or go to the emergency room now, then end the call.
-When you have everything, or the caller wants to stop, say a short goodbye that says the front desk will call back, and end the call.`;
+When you're done, or the caller wants to stop, say a short goodbye (mention the call back only if the front desk needs to call) and end the call.`;
 
 // ---------- front desk ----------
 function bookCall(m) {
@@ -1019,8 +1065,16 @@ async function handle(m) {
       saveAll(); saveWidget(widgetSnapshot()); push(); return call("__done", m.req, true, "");
     }
     case "desk-close": { const c = calls.find(x => x.id === m.id); if (c) { c.status = "closed"; c.closedBy = settings.deskUser; } saveWidget(widgetSnapshot()); break; }
-    case "desk-reopen": { const c = calls.find(x => x.id === m.id); if (c && c.status === "closed") c.status = "waiting"; saveWidget(widgetSnapshot()); break; }
+    case "desk-reopen": { const c = calls.find(x => x.id === m.id); if (c && (c.status === "closed" || c.status === "noted")) { c.status = "waiting"; delete c.followUp; } saveWidget(widgetSnapshot()); break; }
     case "note": if (addNote(m)) { saveAll(); toast("Note added"); return push(); } return;
+    case "pat-msg": {   // a message Reva passes on when this patient next phones
+      const pt = patients.find(p => p.id === m.patient), text = String(m.text || "").trim().slice(0, 500);
+      if (!pt) return;
+      pt.message = text ? { id: "m-" + Date.now().toString(36), text, by: settings.deskUser || "Front desk", at: Date.now() } : null;
+      saveAll(); toast(text ? `${cfg("assistantName")} will pass it on when ${firstName(pt.name)} calls` : "Message removed"); push();
+      if (lineOn()) lineReq("PUT", "/patients", patientsBrief()).catch(e => startLog("phone line: " + String(e.message || e).slice(0, 100)));
+      return;
+    }
     case "appt-cancel": cancelAppt(m); saveWidget(widgetSnapshot()); saveAll(); toast("Appointment cancelled"); return push();
     case "copy": if (m.text) { Pasteboard.copy(String(m.text)); toast("Copied"); } return;
     case "line-sync": return syncLine(true);
@@ -1823,7 +1877,10 @@ function clientApp() {
     ${recent.length ? `<section class="block"><div class="block-h"><h3>Recent calls</h3><button class="link small" data-act="tab" data-v="desk">Front desk</button></div>
       ${recent.map(c => `<button class="crow" data-act="opencase" data-id="${esc(c.id)}"><span class="stripe tri-${esc((c.summary || {}).triage || "routine")}"></span><span class="grow"><b>${esc(callName(c))}</b><small>${esc((c.summary || {}).reason || "Call")} · ${esc(whenFull(c.at))}</small></span>${statusPill(c)}</button>`).join("")}</section>` : ""}`;
   }
-  const statusPill = c => `<span class="pill st-${esc(c.status)}">${{ waiting: "To book", booked: "Booked", closed: "Closed" }[c.status] || esc(c.status)}</span>`;
+  const statusPill = c => `<span class="pill st-${esc(c.status)}">${{ waiting: "To book", booked: "Booked", closed: "Closed", noted: "No booking" }[c.status] || esc(c.status)}</span>`;
+  // Why the call came in, as the front desk reads it
+  const INTENT_L = { about_visit: "Asked about a visit", change_visit: "Change a booking", other: "Question" };
+  const intentPill = c => c.followUp ? `<span class="pill soft">↩ Called again</span>` : INTENT_L[c.intent] ? `<span class="pill soft">${INTENT_L[c.intent]}</span>` : "";
 
   // Front desk: sign in, then the queue
   let deskFilter = "waiting", signErr = "";
@@ -1839,19 +1896,19 @@ function clientApp() {
       <p class="note">Demo PIN: ${esc(S.demoPin)}</p>
       ${signErr ? `<p class="err">${esc(signErr)}</p>` : ""}
       <button class="primary block" data-act="signin">Sign in</button></section>`;
-    const sets = { waiting: S.calls.filter(c => c.status === "waiting"), booked: S.calls.filter(c => c.status === "booked"), closed: S.calls.filter(c => c.status === "closed"), all: S.calls };
+    const sets = { waiting: S.calls.filter(c => c.status === "waiting"), booked: S.calls.filter(c => c.status === "booked"), closed: S.calls.filter(c => c.status === "closed" || c.status === "noted"), all: S.calls };
     const list = sets[deskFilter] || sets.waiting;
     if (deskFilter === "waiting") list.sort((a, b) => ((b.summary || {}).priority || 0) - ((a.summary || {}).priority || 0) || a.at - b.at);
     const today = S.patients.reduce((n, p) => n + (p.appts || []).filter(a => a.status === "booked" && a.made && sod(a.made) === sod(Date.now())).length, 0);
     return `<div class="deskbar"><span>Signed in as <b>${esc(st.deskUser)}</b>${today ? ` · booked today: ${today}` : ""}</span><span class="db-acts">${S.line && S.line.on ? `<button class="link small" data-act="line-sync">${S.line.busy ? "Checking…" : "📞 Check line"}</button>` : ""}<button class="link small" data-act="signout">Sign out</button></span></div>
-      <div class="segbar"><div class="seg wide">${[["waiting", "To book"], ["booked", "Booked"], ["closed", "Closed"], ["all", "All"]].map(([v, l]) => `<button class="${deskFilter === v ? "on" : ""}" data-act="dfilter" data-v="${v}">${l} <i>${sets[v].length}</i></button>`).join("")}</div></div>
+      <div class="segbar"><div class="seg wide">${[["waiting", "To book"], ["booked", "Booked"], ["closed", "Other"], ["all", "All"]].map(([v, l]) => `<button class="${deskFilter === v ? "on" : ""}" data-act="dfilter" data-v="${v}">${l} <i>${sets[v].length}</i></button>`).join("")}</div></div>
       ${list.length ? `<div class="queue">${list.map(queueCard).join("")}</div>` : `<div class="empty"><h2>${deskFilter === "waiting" ? "Nobody is waiting" : "Nothing here yet"}</h2><p>${deskFilter === "waiting" ? `When someone calls, ${esc(S.assistant)}'s note lands here. Try it yourself on the Call tab.` : "Calls show up here as you work through them."}</p>${deskFilter === "waiting" ? `<button class="primary" data-act="tab" data-v="call">Make a call</button>` : ""}</div>`}`;
   }
   function queueCard(c) {
     const s = c.summary || {}, f = c.fields || {}, bk = c.booking;
     return `<button class="qcard" data-act="opencase" data-id="${esc(c.id)}">
       <span class="stripe tri-${esc(s.triage || "routine")}"></span>
-      <span class="q-top">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Phone</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}<span class="q-when">${esc(rel(c.at))}</span></span>
+      <span class="q-top">${c.status === "noted" ? statusPill(c) : triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Phone</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}${intentPill(c)}${(c.again || []).length ? `<span class="pill warn">Called ${c.again.length + 1}×</span>` : ""}<span class="q-when">${esc(rel(c.at))}</span></span>
       <b class="q-name">${esc(callName(c))}${f.age ? `<small>, ${esc(f.age)}</small>` : ""}</b>
       <span class="q-why">${esc(s.reason || f.complaint || "No reason given")}</span>
       <span class="chips">${f.pain != null ? `<span class="pill">Pain ${esc(f.pain)}/10</span>` : ""}${f.urgency != null ? `<span class="pill">Urgency ${esc(f.urgency)}/5</span>` : ""}${c.mood ? `<span class="pill">${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}</span>` : ""}${f.preferred ? `<span class="pill soft">${esc(String(f.preferred).slice(0, 34))}</span>` : ""}</span>
@@ -1913,6 +1970,11 @@ function clientApp() {
       return `<div class="booked"><b>✓ Booked: ${esc(dayLabel(c.booking.at))}, ${hhmm(c.booking.at)}</b><span>${esc(d.name || "")} · ${esc(d.role || "")}</span><small class="muted">by ${esc(c.booking.by || "")}</small>
         <div class="aic-btns"><button class="sm" data-act="copyconf" data-id="${esc(c.id)}">Copy confirmation text</button>${appt ? `<button class="sm danger ${caseArmed === "cancel" ? "armed" : ""}" data-act="apptcancel" data-p="${esc(pt.id)}" data-v="${esc(appt.id)}">${caseArmed === "cancel" ? "Confirm" : "Cancel appointment"}</button>` : ""}</div></div>`;
     }
+    if (c.status === "noted") {
+      const w = c.followUp && byCall(c.followUp);
+      return `<div class="booked closed"><b>${w ? "Called again about a request that's waiting" : "No booking needed"}</b><span class="muted">${w ? `The request from ${esc(rel(w.at))} has this call too.` : c.intent === "about_visit" ? `${esc(S.assistant)} answered a question about a booked visit.` : "A question; filed under the patient."}</span>
+        <div class="aic-btns">${w ? `<button class="sm" data-act="opencase" data-id="${esc(w.id)}">Open the waiting request</button>` : ""}<button class="sm" data-act="reopen" data-id="${esc(c.id)}">Move to To book</button></div></div>`;
+    }
     if (c.status === "closed") return `<div class="booked closed"><b>Closed without booking</b><span class="muted">${c.closedBy ? "by " + esc(c.closedBy) : ""}</span><div class="aic-btns"><button class="sm" data-act="reopen" data-id="${esc(c.id)}">Reopen</button></div></div>`;
     const doc = docOf(caseDoc) || S.doctors[0], s = c.summary || {}, pf = prefers(c);
     const days = workDays(doc);
@@ -1939,7 +2001,9 @@ function clientApp() {
     el.innerHTML = `<div class="sh-head"><h2>${esc(callName(c))}</h2><button class="link" data-act="caseclosesheet">Done</button></div><div class="sh-body">
       <div class="sumbox">${s.kind === "ai" ? `<span class="badge-ai">✦ AI note by ${PN[s.provider] || "AI"}</span>` : `<span class="badge-ex">Note · no AI</span>`}
         <p class="sum-t">${esc(s.text || "")}</p>
-        <div class="chips">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Real phone call</span>` : ""}${s.priority ? `<span class="pill">Priority ${esc(s.priority)}/5</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}</div>
+        <div class="chips">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Real phone call</span>` : ""}${s.priority ? `<span class="pill">Priority ${esc(s.priority)}/5</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}${intentPill(c)}</div>
+        ${(c.again || []).length ? `<p class="note">↩ Called again ${c.again.map(id => byCall(id)).filter(Boolean).map(x => esc(rel(x.at))).join(", ")}: ${c.again.map(id => byCall(id)).filter(Boolean).map(x => `<button class="link small" data-act="opencase" data-id="${esc(x.id)}">read</button>`).join(" ")}</p>` : ""}
+        ${c.delivered ? `<p class="note">✉ ${esc(S.assistant)} passed on the front desk's message: “${esc(c.delivered)}”</p>` : ""}
         ${(s.flags || []).length ? `<div class="chips">${s.flags.map(x => `<span class="pill flag">⚠ ${esc(x)}</span>`).join("")}</div>` : ""}
       </div>
       <h3 class="sec2">Booking</h3>${bookingHTML(c)}
@@ -2046,8 +2110,12 @@ function clientApp() {
       <dl class="facts"><div><dt>Phone</dt><dd>${esc(p.phone)}</dd></div>${p.age ? `<div><dt>Age</dt><dd>${esc(p.age)}</dd></div>` : ""}<div><dt>Patient since</dt><dd>${esc(new Date(p.since).toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</dd></div></dl>
       <h3 class="sec2">Coming up</h3>
       ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || "")}</small></div><button class="sm danger ${patArmed === a.id ? "armed" : ""}" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">${patArmed === a.id ? "Confirm" : "Cancel"}</button></div>`).join("") : `<p class="muted">Nothing booked.</p>`}
+      <h3 class="sec2">Message for ${esc(p.name.split(" ")[0])}</h3>
+      ${p.message ? `<div class="appt msg"><div class="grow"><b>“${esc(p.message.text)}”</b><small>${esc(S.assistant)} passes it on at the next call · ${esc(p.message.by)}, ${esc(dayLabel(p.message.at))}</small></div><button class="sm" data-act="patmsgclear" data-id="${esc(p.id)}">Remove</button></div>`
+        : `<p class="muted">${esc(S.assistant)} passes a message on when ${esc(p.name.split(" ")[0])} next phones.</p><textarea id="patmsg" class="cfgin wide" rows="2" placeholder="For example: please bring your X-rays on Friday"></textarea><button class="sm" data-act="patmsg" data-id="${esc(p.id)}">Save message</button>`}
+      ${(p.messages || []).length ? `<ul class="notes">${p.messages.slice(0, 5).map(m => `<li><p>“${esc(m.text)}”</p><small class="muted">✓ Passed on ${esc(whenFull(m.delivered))}</small></li>`).join("")}</ul>` : ""}
       <h3 class="sec2">Calls</h3>
-      ${cl.length ? cl.map(c => `<button class="crow" data-act="opencase" data-id="${esc(c.id)}"><span class="stripe tri-${esc((c.summary || {}).triage || "routine")}"></span><span class="grow"><b>${esc((c.summary || {}).reason || "Call")}</b><small>${esc(whenFull(c.at))}${c.mood ? " · " + (S.moods[c.mood.label] || "") + " " + esc(c.mood.label) : ""}</small></span>${statusPill(c)}</button>`).join("") : `<p class="muted">No calls yet.</p>`}
+      ${cl.length ? cl.map(c => `<button class="crow" data-act="opencase" data-id="${esc(c.id)}"><span class="stripe tri-${esc((c.summary || {}).triage || "routine")}"></span><span class="grow"><b>${esc((c.summary || {}).reason || "Call")}</b><small>${esc(whenFull(c.at))}${INTENT_L[c.intent] ? " · " + INTENT_L[c.intent] : c.followUp ? " · called again" : ""}${c.mood ? " · " + (S.moods[c.mood.label] || "") + " " + esc(c.mood.label) : ""}</small></span>${statusPill(c)}</button>`).join("") : `<p class="muted">No calls yet.</p>`}
       <h3 class="sec2">Visits</h3>
       ${past.length ? `<ul class="hist">${past.map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">No visits yet.</p>`}
       <h3 class="sec2">Notes</h3>
@@ -2160,6 +2228,8 @@ function clientApp() {
         break;
       case "pgroup": S.settings.patGroup = v; send("set", { k: "patGroup", v }); render(); break;
       case "patnote": { const ta = $("#patnote"); if (ta && ta.value.trim()) { send("note", { patient: id, text: ta.value }); ta.value = ""; } break; }
+      case "patmsg": { const ta = $("#patmsg"); if (ta && ta.value.trim()) { send("pat-msg", { patient: id, text: ta.value }); ta.value = ""; } break; }
+      case "patmsgclear": send("pat-msg", { patient: id, text: "" }); break;
       // settings
       case "upd-now": updNow(t); break;
       case "upd-later": updLater(); break;
@@ -2382,7 +2452,8 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .block-h h3{font:700 calc(18px * var(--ts))/1.2 var(--display);margin:0}
 .crow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:12px 2px;border-bottom:1px solid var(--rule);position:relative}
 .crow .stripe{position:static;width:4px;align-self:stretch;border-radius:2px;flex:none}
-.pill{display:inline-flex;align-items:center;gap:4px;font-size:calc(12.5px * var(--ts));font-weight:650;line-height:1.35;border-radius:7px;padding:2px 8px;background:var(--paper);border:1px solid var(--rule);color:var(--ink-2);max-width:100%;min-width:0;overflow-wrap:anywhere;text-align:left}
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:calc(12.5px * var(--ts));font-weight:650;line-height:1.35;border-radius:7px;padding:2px 8px;background:var(--paper);border:1px solid var(--rule);color:var(--ink-2);max-width:100%;min-width:0;flex:none;white-space:nowrap;text-align:left}
+.pill.flag,.chips .pill{white-space:normal;overflow-wrap:anywhere;flex:0 1 auto}
 .pill.soft{font-weight:500}
 .pill.flag{color:var(--danger);border-color:var(--danger);background:var(--sheet);align-items:flex-start;padding:4px 8px}
 .pill.st-waiting{color:var(--signal);border-color:var(--signal);background:var(--signal-wash)}
@@ -2441,8 +2512,8 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .queue{max-width:680px;margin:0 auto;padding:8px 14px 0;display:flex;flex-direction:column;gap:var(--gap)}
 .qcard{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;text-align:left;background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:var(--pad) 16px var(--pad) 22px;overflow:hidden}
 .qcard .stripe{position:absolute;left:0;top:0;bottom:0;width:6px}
-.q-top{display:flex;align-items:center;gap:6px;width:100%}
-.q-when{margin-left:auto;font-size:calc(12.5px * var(--ts));color:var(--muted)}
+.q-top{display:flex;align-items:center;flex-wrap:wrap;gap:6px;width:100%}
+.q-when{margin-left:auto;white-space:nowrap;font-size:calc(12.5px * var(--ts));color:var(--muted)}
 .q-name{font:700 calc(19px * var(--ts))/1.25 var(--display);margin-top:4px}
 .q-name small{font-weight:500;color:var(--muted)}
 .q-why{color:var(--ink-2);font-size:calc(15px * var(--ts))}
@@ -2490,6 +2561,7 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .appt{display:flex;align-items:center;gap:10px;padding:11px 14px;background:var(--sheet);border:1px solid var(--rule);border-radius:14px;margin-bottom:8px}
 .appt b{display:block;font-weight:650}
 .appt small{display:block;color:var(--ink-2);font-size:calc(13px * var(--ts))}
+.appt.msg b,.appt.msg small{white-space:normal;overflow:visible;overflow-wrap:anywhere}
 .cfgin.wide{display:block;width:100%;margin:8px 0;font:16px/1.45 var(--sans);padding:9px 11px;border-radius:10px;border:1px solid var(--rule);background:var(--paper);color:var(--ink);-webkit-user-select:text;user-select:text}
 textarea.cfgin.wide{resize:vertical}
 

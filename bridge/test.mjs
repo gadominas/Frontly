@@ -18,8 +18,9 @@ const EVENT = { type: "post_call_transcription", event_timestamp: 1763000000, da
   metadata: { start_time_unix_secs: 1763000000, call_duration_secs: 95, phone_call: { direction: "inbound", external_number: "+37061234567", agent_number: "+37052000000", type: "twilio" } },
   analysis: { transcript_summary: "Jonas has toothache.", data_collection_results: {
     name: { data_collection_id: "name", value: "Jonas Petrauskas" }, age: { value: "52" }, complaint: { value: "Toothache, lower left" },
-    pain: { value: 7 }, urgency: { value: 9 }, mood: { value: "Worried" }, language: { value: "lt" } } },
-  conversation_initiation_client_data: { dynamic_variables: { system__caller_id: "+37061234567" } } } };
+    pain: { value: 7 }, urgency: { value: 9 }, mood: { value: "Worried" }, language: { value: "lt" },
+    intent: { value: "About_Visit" }, message_passed: { value: true } } },
+  conversation_initiation_client_data: { dynamic_variables: { system__caller_id: "+37061234567", patient_message_id: "m-1" } } } };
 
 await ok("health shows the number, without a token", async () => {
   const r = await call("GET", "/health"); const j = await r.json();
@@ -30,7 +31,8 @@ await ok("everything else needs the app token", async () => {
   assert.equal((await call("GET", "/calls", { headers: { authorization: "Bearer nope" } })).status, 401);
 });
 await ok("Frontly's patient list is kept", async () => {
-  const r = await call("PUT", "/patients", { headers: { authorization: "Bearer app-123" }, body: [{ name: "Jonas Petrauskas", age: 52, phone: "+370 612 34567", history: "Filling in September" }] });
+  const r = await call("PUT", "/patients", { headers: { authorization: "Bearer app-123" }, body: [{ name: "Jonas Petrauskas", age: 52, phone: "+370 612 34567", history: "Filling in September",
+    appointments: "Friday 13 November at 10:30 with Dr. Tomas Petraitis (Endodontist): root canal", waiting: "", message: "Please bring your X-rays.", messageId: "m-1" }] });
   assert.equal((await r.json()).patients, 1);
 });
 await ok("call start: a known number gets his name and a Lithuanian opening", async () => {
@@ -42,11 +44,16 @@ await ok("call start: a known number gets his name and a Lithuanian opening", as
   assert.match(j.dynamic_variables.opening, /Ar tai Jonas\?/);
   assert.equal(j.conversation_config_override.agent.language, "lt");
   assert.equal(j.dynamic_variables.call_language, "Lithuanian");
+  assert.match(j.dynamic_variables.patient_appointments, /Friday 13 November at 10:30 with Dr\. Tomas Petraitis/);
+  assert.equal(j.dynamic_variables.patient_waiting, "none");
+  assert.equal(j.dynamic_variables.patient_message, "Please bring your X-rays.");
+  assert.equal(j.dynamic_variables.patient_message_id, "m-1");
 });
 await ok("call start: an unknown number is asked for a name; every variable is present", async () => {
   const j = await (await call("POST", "/elevenlabs/init", { headers: { "x-frontly-token": "init-xyz" }, body: { caller_id: "+37069999999" } })).json();
   assert.equal(j.dynamic_variables.patient_known, "no");
-  assert.deepEqual(Object.keys(j.dynamic_variables).sort(), ["call_language", "caller_number", "opening", "patient_age", "patient_history", "patient_known", "patient_name"]);
+  assert.deepEqual(Object.keys(j.dynamic_variables).sort(), ["call_language", "caller_number", "opening", "patient_age", "patient_appointments", "patient_history", "patient_known", "patient_message", "patient_message_id", "patient_name", "patient_waiting"]);
+  assert.equal(j.dynamic_variables.patient_appointments, "none"); assert.equal(j.dynamic_variables.patient_message, "none");
   assert.match(j.dynamic_variables.opening, /vardą ir pavardę/);
 });
 const start = async (body) => (await call("POST", "/elevenlabs/init", { headers: { "x-frontly-token": "init-xyz" }, body })).json();
@@ -100,6 +107,7 @@ await ok("a signed post-call webhook becomes one call in Frontly's shape", async
   assert.equal(c.fields.name, "Jonas Petrauskas"); assert.equal(c.fields.age, 52); assert.equal(c.fields.pain, 7);
   assert.equal(c.fields.urgency, null, "an urgency outside 1–5 is dropped");
   assert.equal(c.mood.label, "worried"); assert.equal(c.summary, "Jonas has toothache.");
+  assert.equal(c.intent, "about_visit"); assert.equal(c.messageId, "m-1"); assert.equal(c.messagePassed, true);
 });
 await ok("since= returns only newer calls", async () => {
   const j = await (await call("GET", "/calls?since=1763000000000", { headers: { authorization: "Bearer app-123" } })).json();

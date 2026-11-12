@@ -186,7 +186,7 @@ Frontly checks this repository for a new version each time it opens. When one is
 
 - Patients, calls and settings are JSON files in iCloud Drive › Scriptable › Frontly, or on the iPhone when it has no iCloud.
 - Without a key nothing leaves the phone except the update check. With a key, each answer you give during a call (with the call so far) goes to the provider in use, and the finished call goes to it once for the note; with the AI voice, each line Reva says goes to OpenAI, and with OpenAI transcription, each recorded answer does too.
-- With the real phone line set up, calls go through Twilio and ElevenLabs and your own Cloudflare bridge, and Frontly sends the bridge a short patient list (name, age, number, last and next visit) so Reva can greet known callers. See [bridge/README.md](bridge/README.md#privacy).
+- With the real phone line set up, calls go through Twilio and ElevenLabs and your own Cloudflare bridge, and Frontly sends the bridge a short patient list (name, age, number, last visit, booked visits, a waiting request and any message the front desk left for the patient) so Reva can greet known callers, tell them when their visit is and pass the message on. See [bridge/README.md](bridge/README.md#privacy).
 - AI keys and the phone line's token stay in the iOS Keychain and are only sent to their own service.
 - The update check only downloads `releases.json` from this repository.
 

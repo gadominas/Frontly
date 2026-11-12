@@ -52,7 +52,7 @@ scenario('phone line', async (t) => {
   t.check(/AI note by ElevenLabs/.test(app.text('#casesheet')) && /phone line, answered by ElevenLabs/.test(app.text('#casesheet')), 'the case says who answered and who wrote the note');
   const css = app.$$('style').map((e) => e.textContent).join('\n');
   const rule = (sel) => [...css.matchAll(/(?:^|[}\n])([^{}\n]+)\{([^}]*)\}/g)].filter((m) => m[1].trim() === sel).map((m) => m[2]).join(';');   // every rule for that selector
-  t.check(!/nowrap/.test(rule('.pill')) && /max-width:100%/.test(rule('.pill')), 'a long warning wraps inside the note instead of running off the screen');
+  t.check(/max-width:100%/.test(rule('.pill')) && /white-space:normal/.test(rule('.pill.flag,.chips .pill')) && /flex-wrap:wrap/.test(rule('.q-top')), 'a long warning wraps inside the note instead of running off the screen');
   t.check(/overflow-x:hidden/.test(rule('.sheet')) && /overflow-x:hidden/.test(rule('html,body')), 'the case sheet and the page never scroll sideways');
   app.tap('[data-act="caseclosesheet"]');
   app.tap('[data-act="tab"][data-v="call"]');

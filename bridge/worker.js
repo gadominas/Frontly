@@ -5,7 +5,8 @@
 //   POST /elevenlabs/init     ElevenLabs, when a call starts: who is calling? → Reva's opening line and the patient
 //   POST /elevenlabs/webhook  ElevenLabs, when a call ends: the transcript and the details Reva collected (HMAC-signed)
 //   GET  /calls?since=<ms>    Frontly: finished calls since then
-//   PUT  /patients            Frontly: a short list of patients (name, age, phone, last visit) for the lookup above
+//   PUT  /patients            Frontly: a short list of patients (name, age, phone, last visit, booked visits, a waiting
+//                             request, a message from the front desk) for the lookup above
 //   POST /calls               Frontly or any other voice service: add a call in Frontly's own shape
 //   GET  /health              anyone: is it up, and which number to call
 //
@@ -81,6 +82,10 @@ async function onInit(req, env) {
       patient_name: p ? p.name : "",
       patient_age: p && p.age ? String(p.age) : "",
       patient_history: p ? (p.history || "") : "",
+      patient_appointments: (p && p.appointments) || "none",   // what Reva tells a patient asking when, and with whom
+      patient_waiting: (p && p.waiting) || "none",             // a request the front desk hasn't booked yet
+      patient_message: (p && p.message) || "none",             // the front desk's message, passed on at this call
+      patient_message_id: (p && p.messageId) || "",            // comes back in the post-call webhook: which message it was
       caller_number: String(b.caller_id || ""),
     },
   });
@@ -88,6 +93,7 @@ async function onInit(req, env) {
 
 // The call ends: ElevenLabs' transcript and data collection → one call in Frontly's shape.
 const DC_NUM = { age: [0, 120], pain: [0, 10], urgency: [1, 5] };
+const INTENTS = ["new_visit", "about_visit", "change_visit", "other"];   // why they called (data collection "intent")
 function fromElevenLabs(ev) {
   const d = ev.data || {}, m = d.metadata || {}, a = d.analysis || {}, dc = a.data_collection_results || {};
   const dv = ((d.conversation_initiation_client_data || {}).dynamic_variables) || {};
@@ -107,6 +113,8 @@ function fromElevenLabs(ev) {
     transcript: (d.transcript || []).filter((x) => x && x.message).map((x) => ({ who: x.role === "agent" ? "reva" : "caller", t: String(x.message).slice(0, 2000) })),
     fields, mood: val("mood") ? { label: String(val("mood")).toLowerCase().slice(0, 20) } : null,
     lang: val("language") || "", summary: a.transcript_summary || "", received: Date.now(),
+    intent: INTENTS.includes(String(val("intent") || "").toLowerCase()) ? String(val("intent")).toLowerCase() : "",
+    messageId: String(dv.patient_message_id || ""), messagePassed: /^(true|yes|1)$/i.test(String(val("message_passed") ?? "")),
   };
 }
 async function putCall(env, c) {
@@ -148,7 +156,9 @@ export default {
       if (req.method === "PUT" && path === "/patients") {
         const list = await req.json();
         if (!Array.isArray(list)) return json({ error: "expected a list" }, 400);
-        const clean = list.slice(0, 500).map((p) => ({ name: String(p.name || "").slice(0, 80), age: p.age || null, phone: String(p.phone || "").slice(0, 30), history: String(p.history || "").slice(0, 300) }));
+        const t = (v, n) => String(v || "").slice(0, n);
+        const clean = list.slice(0, 500).map((p) => ({ name: t(p.name, 80), age: p.age || null, phone: t(p.phone, 30), history: t(p.history, 300),
+          appointments: t(p.appointments, 600), waiting: t(p.waiting, 300), message: t(p.message, 600), messageId: t(p.messageId, 40) }));
         await env.FRONTLY.put("patients", JSON.stringify(clean));
         return json({ ok: true, patients: clean.length });
       }
