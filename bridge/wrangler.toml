@@ -11,5 +11,6 @@ id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"   # npx wrangler kv namespace create FR
 PHONE_NUMBER = "+370 5 000 0000"      # the Twilio number callers dial
 CLINIC_NAME = "Northlight Dental"
 ASSISTANT_NAME = "Reva"
-LANGUAGE = "lt"                        # Reva's opening line: lt or en
+LANGUAGE = "lt"                        # when neither number gives a country: lt, lv or en
+# LANGUAGE_OVERRIDE = "off"            # only if Reva › Security › Overrides › Agent language is off
 # Secrets (npx wrangler secret put …): APP_TOKEN, EL_WEBHOOK_SECRET, INIT_TOKEN

@@ -33,7 +33,8 @@ Everything below can be done in a browser, on the iPhone too. Allow about 40 min
 | `INIT_TOKEN` | Secret | Any long random text. You'll paste the same text into ElevenLabs in step 3 |
 | `EL_WEBHOOK_SECRET` | Secret | Leave for now: ElevenLabs gives it to you in step 3 |
 | `PHONE_NUMBER` | Text | The Twilio number, as callers should see it: `+370 5 …` |
-| `LANGUAGE` | Text | `lt` (Reva opens in Lithuanian) or `en` |
+| `LANGUAGE` | Text | `lt`, `lv` or `en`: the language when neither the caller's number nor the number dialled gives a country. Otherwise the caller's country code decides: `+370` Lithuanian, `+371` Latvian, any other country English |
+| `LANGUAGE_OVERRIDE` | Text | Optional. Set it to `off` only if you leave **Agent language** off in step 3; ElevenLabs drops a call whose override is switched off |
 | `CLINIC_NAME` | Text | `Northlight Dental`, or whatever Frontly's Settings › Clinic says |
 | `ASSISTANT_NAME` | Text | `Reva`, or your receptionist's name in Frontly |
 
@@ -45,9 +46,9 @@ With the command line instead: `npx wrangler kv namespace create FRONTLY`, put i
 
 1. Sign up at [elevenlabs.io](https://elevenlabs.io) › **Agents › New agent › Blank**, name it Reva.
 2. **System prompt**: in Frontly, **Settings › Phone line › Reva's instructions › Copy**, and paste.
-3. **First message**: `{{opening}}` (the bridge fills it in: "Ar tai Jonas?" for a known number, a name question for anyone else).
-4. **Language**: Lithuanian, with English as an additional language and **language detection** on; check that the voice you pick speaks Lithuanian well.
-5. **Dynamic variables**: give each a default, used when you test in the browser: `opening` = `Hello, this is Reva at Northlight Dental. May I have your name?`, `patient_known` = `no`, and `patient_name`, `patient_age`, `patient_history`, `caller_number` empty.
+3. **First message**: `{{opening}}` (the bridge fills it in, in the caller's language: "Ar tai Jonas?" for a known number, a name question for anyone else).
+4. **Language**: English, Lithuanian and Latvian, with **language detection** on; check that the voice speaks all three well. In **Security › Overrides**, turn on **Agent language**: the bridge then starts each call in the caller's language (+370 Lithuanian, +371 Latvian, other countries English), voice and speech recognition included.
+5. **Dynamic variables**: give each a default, used when you test in the browser: `opening` = `Hello, this is Reva at Northlight Dental. May I have your name?`, `patient_known` = `no`, `call_language` = `Lithuanian`, and `patient_name`, `patient_age`, `patient_history`, `caller_number` empty.
 6. **Tools**: turn on **End call**.
 7. **Analysis › Data collection**: add these ten, with exactly these identifiers (the bridge reads them by name):
 

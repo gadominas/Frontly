@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.1.1';
+const VERSION = '1.1.2';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -875,7 +875,7 @@ async function syncLine(manual) {
 }
 // Reva's instructions for the ElevenLabs agent, with the variables the bridge fills in when a call starts.
 const PHONE_PROMPT = () => `You are ${cfg("assistantName")}, the virtual receptionist of ${cfg("clinicName")}, a dental clinic in Vilnius, Lithuania. You answer real phone calls.
-Speak the caller's language: Lithuanian or English. Keep every reply short: one or two spoken sentences, one question at a time.
+Start in {{call_language}}: the bridge picks it from the caller's number (+370 Lithuanian, +371 Latvian, other countries English). If the caller answers in another of these three languages, switch to theirs. Keep every reply short: one or two spoken sentences, one question at a time.
 Collect for the front desk: the caller's full name, their age, the reason for the call, where it hurts (which tooth or side), the pain from 0 to 10, how urgent it feels to the caller from 1 (it can wait) to 5 (needs help today), the best time for a visit, and anything else that matters (swelling, fever, bleeding, medicines, allergies, pregnancy, a child as the patient).
 Known patient: {{patient_known}}. Name: {{patient_name}}. Age: {{patient_age}}. History: {{patient_history}}.
 If the patient is known, confirm it's them by first name, don't ask for their name or age again, and use their history when it helps.

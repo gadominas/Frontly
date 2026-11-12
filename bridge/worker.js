@@ -10,7 +10,8 @@
 //   GET  /health              anyone: is it up, and which number to call
 //
 // Bindings (Cloudflare › Worker › Settings): KV namespace FRONTLY; secrets APP_TOKEN, EL_WEBHOOK_SECRET, INIT_TOKEN;
-// plain variables PHONE_NUMBER (shown in Frontly), CLINIC_NAME, ASSISTANT_NAME, LANGUAGE ("lt" or "en").
+// plain variables PHONE_NUMBER (shown in Frontly), CLINIC_NAME, ASSISTANT_NAME, LANGUAGE ("lt", "lv" or "en": the language
+// when neither number says), LANGUAGE_OVERRIDE ("off" if the agent's Language override is switched off in ElevenLabs).
 
 const CALL_TTL = 30 * 24 * 3600;   // calls are kept 30 days
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -42,20 +43,40 @@ async function patientByPhone(env, phone) {
 }
 const first = (n) => String(n || "").trim().split(/\s+/)[0] || "";
 
+// Which language the call starts in. The caller's country code decides: +370 Lithuanian, +371 Latvian, any other
+// country English. A hidden caller falls back to the number dialled, then to LANGUAGE.
+const LANG_NAME = { lt: "Lithuanian", lv: "Latvian", en: "English" };
+const PREFIX_LANG = [["370", "lt"], ["371", "lv"]];
+const HIDDEN = ["266696687", "7378742833", "2562533", "8656696"];   // Twilio's stand-ins for anonymous, restricted, blocked, unknown
+function langOf(n) {
+  const raw = String(n || "").trim(), d = digits(raw);
+  if (d.length < 8 || HIDDEN.includes(d)) return null;           // hidden, anonymous or not a full number
+  for (const [p, l] of PREFIX_LANG) if (d.startsWith(p) || d.startsWith("00" + p)) return l;
+  return raw.startsWith("+") || raw.startsWith("00") ? "en" : null;   // another country; a bare local number says nothing
+}
+function callLanguage(env, caller, called) {
+  return langOf(caller) || langOf(called) || (LANG_NAME[env.LANGUAGE] ? env.LANGUAGE : "en");
+}
+
 // The call starts: Reva's opening line and what she knows about the caller (ElevenLabs dynamic variables).
-function opening(env, p) {
-  const clinic = env.CLINIC_NAME || "Northlight Dental", a = env.ASSISTANT_NAME || "Reva";
-  if ((env.LANGUAGE || "en") === "lt") return p ? `Labas, skambinate į ${clinic}, aš ${a}. Ar tai ${first(p.name)}?` : `Labas, skambinate į ${clinic}, aš ${a}. Gal galite pasakyti savo vardą ir pavardę?`;
-  return p ? `Hello, you've reached ${clinic}, this is ${a}. Am I speaking with ${first(p.name)}?` : `Hello, you've reached ${clinic}, this is ${a}. May I have your full name, please?`;
+function opening(env, p, lang) {
+  const clinic = env.CLINIC_NAME || "Northlight Dental", a = env.ASSISTANT_NAME || "Reva", n = p && first(p.name);
+  if (lang === "lt") return p ? `Labas, skambinate į ${clinic}, aš ${a}. Ar tai ${n}?` : `Labas, skambinate į ${clinic}, aš ${a}. Gal galite pasakyti savo vardą ir pavardę?`;
+  if (lang === "lv") return p ? `Labdien, jūs zvanāt uz ${clinic}, es esmu ${a}. Vai tas ir ${n}?` : `Labdien, jūs zvanāt uz ${clinic}, es esmu ${a}. Lūdzu, pasakiet savu vārdu un uzvārdu.`;
+  return p ? `Hello, you've reached ${clinic}, this is ${a}. Am I speaking with ${n}?` : `Hello, you've reached ${clinic}, this is ${a}. May I have your full name, please?`;
 }
 async function onInit(req, env) {
   if (!env.INIT_TOKEN || req.headers.get("x-frontly-token") !== env.INIT_TOKEN) return json({ error: "unauthorized" }, 401);
   const b = await req.json().catch(() => ({}));
-  const p = await patientByPhone(env, b.caller_id);
+  const p = await patientByPhone(env, b.caller_id), lang = callLanguage(env, b.caller_id, b.called_number);
   return json({
     type: "conversation_initiation_client_data",
+    // The voice and speech recognition start in the caller's language. Needs Reva › Security › Overrides ›
+    // Agent language on; ElevenLabs refuses an override that is switched off, so LANGUAGE_OVERRIDE=off skips it.
+    ...(env.LANGUAGE_OVERRIDE === "off" ? {} : { conversation_config_override: { agent: { language: lang } } }),
     dynamic_variables: {   // every variable the agent defines must be here, known patient or not
-      opening: opening(env, p),
+      opening: opening(env, p, lang),
+      call_language: LANG_NAME[lang],
       patient_known: p ? "yes" : "no",
       patient_name: p ? p.name : "",
       patient_age: p && p.age ? String(p.age) : "",

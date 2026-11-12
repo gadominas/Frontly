@@ -40,12 +40,38 @@ await ok("call start: a known number gets his name and a Lithuanian opening", as
   assert.equal(j.dynamic_variables.patient_known, "yes");
   assert.equal(j.dynamic_variables.patient_name, "Jonas Petrauskas");
   assert.match(j.dynamic_variables.opening, /Ar tai Jonas\?/);
+  assert.equal(j.conversation_config_override.agent.language, "lt");
+  assert.equal(j.dynamic_variables.call_language, "Lithuanian");
 });
 await ok("call start: an unknown number is asked for a name; every variable is present", async () => {
   const j = await (await call("POST", "/elevenlabs/init", { headers: { "x-frontly-token": "init-xyz" }, body: { caller_id: "+37069999999" } })).json();
   assert.equal(j.dynamic_variables.patient_known, "no");
-  assert.deepEqual(Object.keys(j.dynamic_variables).sort(), ["caller_number", "opening", "patient_age", "patient_history", "patient_known", "patient_name"]);
+  assert.deepEqual(Object.keys(j.dynamic_variables).sort(), ["call_language", "caller_number", "opening", "patient_age", "patient_history", "patient_known", "patient_name"]);
   assert.match(j.dynamic_variables.opening, /vardą ir pavardę/);
+});
+const start = async (body) => (await call("POST", "/elevenlabs/init", { headers: { "x-frontly-token": "init-xyz" }, body })).json();
+await ok("call start: the caller's country code picks the language", async () => {
+  const lv = await start({ caller_id: "+37129123456", called_number: "+37052000000" });
+  assert.equal(lv.conversation_config_override.agent.language, "lv");
+  assert.equal(lv.dynamic_variables.call_language, "Latvian");
+  assert.match(lv.dynamic_variables.opening, /^Labdien, jūs zvanāt uz Northlight Dental, es esmu Reva\. Lūdzu, pasakiet savu vārdu un uzvārdu\.$/);
+  const en = await start({ caller_id: "+447700900123", called_number: "+37052000000" });
+  assert.equal(en.conversation_config_override.agent.language, "en");
+  assert.match(en.dynamic_variables.opening, /May I have your full name/);
+});
+await ok("call start: a hidden caller gets the language of the number dialled, then LANGUAGE", async () => {
+  for (const hidden of ["+266696687", "anonymous", "", "+7378742833"]) {
+    assert.equal((await start({ caller_id: hidden, called_number: "+37126000000" })).conversation_config_override.agent.language, "lv", hidden);
+  }
+  assert.equal((await start({ caller_id: "anonymous" })).conversation_config_override.agent.language, "lt");   // LANGUAGE=lt
+});
+await ok("call start: LANGUAGE_OVERRIDE=off sends no override but still the right opening", async () => {
+  env.LANGUAGE_OVERRIDE = "off";
+  try {
+    const j = await start({ caller_id: "+37129123456" });
+    assert.equal(j.conversation_config_override, undefined);
+    assert.equal(j.dynamic_variables.call_language, "Latvian");
+  } finally { delete env.LANGUAGE_OVERRIDE; }
 });
 await ok("call start without the shared header is refused", async () => {
   assert.equal((await call("POST", "/elevenlabs/init", { body: { caller_id: "+37061234567" } })).status, 401);
