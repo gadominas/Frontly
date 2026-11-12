@@ -23,8 +23,10 @@ node ../app-blueprints/testkit/bin/run.js -v 04    # one scenario, every step
 | 03-front-desk | A wrong PIN is refused, the demo PIN signs in, the waiting call opens with the suggested dentist, booking writes the appointment to the patient's record, the confirmation text is copied, cancelling takes two taps and puts the call back in the queue |
 | 04-ai-call | With Claude: replies come from AI, the mood shows live with ✦ AI, the AI note is labelled and triaged, every request has `max_tokens`, tokens are counted per feature |
 | 05-ai-fallback | Claude fails mid-call: Reva carries on with her script, a toast says so, the note falls back to no AI |
+| 07-no-dictation | Lithuanian with dictation failing as on a real iPhone: the keyboard opens with a plain explanation, dictation isn't retried, and the choice is remembered in settings.json, the Call tab and Settings |
+| 08-transcribe-hands-free | Lithuanian with an OpenAI key and a fake microphone: dictation fails once, the page records, stops on its own when the caller pauses, OpenAI transcribes, Reva answers and the microphone opens again with no tap |
 | 06-ai-voice | With OpenAI: the greeting goes to OpenAI speech with Reva's instructions and the iPhone voice stays quiet; Settings shows the AI voice, model, instructions and OpenAI transcription; a silent call is closed, not queued |
 
 ## What the tests don't cover
 
-Real voices, iPhone dictation and the microphone, the Ring/Silent switch, how iOS draws the page and the widget, and real AI answers. Run the blueprints' phone checklists for those, in light and dark mode.
+Real voices, real iPhone dictation, whether Scriptable's page may use the microphone, real speech levels for the pause detection, the Ring/Silent switch, how iOS draws the page and the widget, and real AI answers. Run the blueprints' phone checklists for those, in light and dark mode.

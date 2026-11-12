@@ -100,7 +100,7 @@ What else you need:
 
 1. On the **Call** tab, choose who's calling: one of the patients, or **A new caller** with any number.
 2. Tap **Call Northlight Dental**. Reva answers after a ring.
-3. Answer each question. With **Listen when Reva stops talking** on (Settings › Calls), the microphone opens by itself; otherwise tap **Answer**. Tap **Type** to type instead, or tap the microphone while Reva talks to interrupt her.
+3. Answer each question. With **Listen when Reva stops talking** on (Settings › Calls), the microphone opens by itself; otherwise tap **Answer**. With OpenAI transcription Reva also stops listening by herself when you pause, so a call needs no taps. Tap **Type** to type instead, or tap the microphone while Reva talks to interrupt her.
 4. Reva says goodbye when she has everything, or tap **End**. The note appears; **Open it as the receptionist** takes you to the front desk.
 
 ### Work the front desk
@@ -193,7 +193,8 @@ Frontly is one Scriptable script. Its interface is a web page in a `WebView`; th
 | Problem | Try this |
 | --- | --- |
 | Reva doesn't make a sound | Check the volume; Frontly plays with the Ring/Silent switch on. With the AI voice, check the OpenAI key in AI settings |
-| The microphone doesn't open | Turn on Dictation in iOS Settings › General › Keyboard, or tap **Type** |
+| The microphone doesn't open | Turn on Dictation in iOS Settings › General › Keyboard, or tap **Type**. iPhone dictation has no Lithuanian: add an OpenAI key and Reva transcribes you instead |
+| Reva stops listening too soon, or waits too long | **Settings › Calls › Stop listening after a pause of** (OpenAI transcription) |
 | OpenAI transcription switches to iPhone dictation | Scriptable's page couldn't use the microphone on this iPhone; dictation takes over |
 | "AI didn't answer, so Reva carries on with her script" | The provider didn't reply in time or refused the key; the call goes on without AI. Test the key in AI settings |
 | The front desk is empty | Make a call, or **Settings › Demo › Start the demo again** |

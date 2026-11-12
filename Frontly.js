@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -85,6 +85,7 @@ const CONFIG = [
   ]],
   ["Calls", [
     { k: "maxTurns", label: "Questions per call", help: "Reva wraps up after this many answers", unit: "answers", def: 14, min: 6, max: 30, step: 1 },
+    { k: "silenceStop", label: "Stop listening after a pause of", help: "With OpenAI transcription, your answer is sent once you stop talking for this long", unit: "s", def: 1.2, min: 0.6, max: 4, step: 0.2 },
     { k: "listenDelay", label: "Pause before listening", help: "After Reva stops talking, wait this long before the microphone opens", unit: "s", def: 0.4, min: 0, max: 3, step: 0.1 },
     { k: "transcriptKeep", label: "Lines sent to AI per answer", help: "The most recent lines of the call that AI reads before replying", unit: "lines", def: 24, min: 8, max: 60, step: 2 },
   ]],
@@ -820,7 +821,7 @@ function clientState() {
     settings: {
       ai: settings.ai, aiProvider: settings.aiProvider, hasKey: !!aiKey(), hasOpenAI: !!keyFor("openai"), checkUpdates: settings.checkUpdates !== false,
       lang: settings.lang === "lt" ? "lt" : "en", sttEngine: settings.sttEngine || "dictation", speechEngine: settings.speechEngine || "ai", handsFree: settings.handsFree !== false,
-      ttsModel: settings.ttsModel || "gpt-4o-mini-tts", ttsVoice: settings.ttsVoice || "coral", ttsInstructions: settings.ttsInstructions || "", ttsDefaultInstr: TTS_DEFAULT_INSTR, voiceURI: settings.voiceURI || "",
+      ttsModel: settings.ttsModel || "gpt-4o-mini-tts", ttsVoice: settings.ttsVoice || "coral", ttsInstructions: settings.ttsInstructions || "", ttsDefaultInstr: TTS_DEFAULT_INSTR, voiceURI: settings.voiceURI || "", noDictation: settings.noDictation || {},
       deskUser: settings.deskUser || "", tab: settings.tab || "call", callFrom: settings.callFrom || "",
       theme: settings.theme, density: settings.density, font: settings.font, textSize: settings.textSize,
     },
@@ -866,14 +867,22 @@ async function handle(m) {
     }
     case "listen": {   // iPhone dictation: the native dictation screen, then the words back to the page
       let text = "", err = "";
-      try { text = String(await Dictation.start(settings.lang === "lt" ? "lt-LT" : "en-US") || "").trim(); }
+      const lang = settings.lang === "lt" ? "lt" : "en";
+      try { text = String(await Dictation.start(lang === "lt" ? "lt-LT" : "en-US") || "").trim(); }
       catch (e) { err = String(e.message || e); }
+      // iOS has no dictation for some languages (Lithuanian, 2026): remember it, so later answers go another way
+      if (/not supported/i.test(err)) {
+        settings.noDictation = Object.assign({}, settings.noDictation, { [lang]: true }); saveAll();
+        startLog(`iPhone dictation doesn't support ${lang}: ${err.slice(0, 80)}`);
+        await push();
+        return call("onHeard", m.id, "", "unsupported");
+      }
       return call("onHeard", m.id, text, err);
     }
     case "rec-done": {   // OpenAI transcription of what the page recorded
       let text = "", err = "";
       try { text = await aiTranscribe(await pullRecording(Number(m.n) || 0), String(m.mime || "audio/mp4")); }
-      catch (e) { err = String(e.message || e); }
+      catch (e) { err = String(e.message || e); startLog("transcription failed: " + err.slice(0, 120)); }
       return call("onHeard", m.id, text, err);
     }
     case "call-end": {
@@ -1035,7 +1044,7 @@ function clientApp() {
   const LEGACY_TTS = new Set(["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"]);
   function voiceHTML() {
     const st = S.settings;
-    if (!st.hasOpenAI) return `<div class="srow"><div class="grow"><b>Reva's voice</b><small class="muted wrap">An iPhone voice. Add an OpenAI key in AI settings for a natural AI voice and transcription.</small></div></div>${deviceVoiceHTML()}`;
+    if (!st.hasOpenAI) return `<div class="srow"><div class="grow"><b>Reva's voice</b><small class="muted wrap">An iPhone voice. Add an OpenAI key in AI settings for a natural AI voice and transcription.</small></div></div>${deviceVoiceHTML()}${dictationOk() ? "" : `<div class="srow"><div class="grow"><b>How Reva hears you</b><small class="muted wrap">You type: iPhone dictation has no ${LANG_L[st.lang]}. An OpenAI key lets Reva transcribe you.</small></div></div>`}`;
     let html = `<div class="lk-row"><span class="lk-l">Reva's voice</span>${vseg("speechEngine", [["ai", "AI voice"], ["device", "iPhone voice"]])}</div>`;
     if (st.speechEngine === "ai") {
       const tm = (S.ttsModels && S.ttsModels.list) || [];
@@ -1047,7 +1056,8 @@ function clientApp() {
         ${legacy ? "" : `<textarea class="cfgin wide ttsinstr" rows="3" placeholder="${esc(st.ttsDefaultInstr)}" aria-label="How Reva sounds">${esc(st.ttsInstructions)}</textarea><small class="muted wrap">How Reva sounds. Empty uses the default above.</small>`}
         <button class="sm" data-act="voicetest">Hear Reva</button></div>`;
     } else html += deviceVoiceHTML();
-    html += `<div class="lk-row"><span class="lk-l">How Reva hears you</span>${vseg("sttEngine", [["dictation", "iPhone dictation"], ["openai", "OpenAI transcription"]])}</div>`;
+    html += dictationOk() ? `<div class="lk-row"><span class="lk-l">How Reva hears you</span>${vseg("sttEngine", [["dictation", "iPhone dictation"], ["openai", "OpenAI transcription"]])}</div>`
+      : `<div class="srow"><div class="grow"><b>How Reva hears you</b><small class="muted wrap">OpenAI transcription: iPhone dictation has no ${LANG_L[st.lang]}.</small></div></div>`;
     return html;
   }
   function deviceVoiceHTML() {
@@ -1388,7 +1398,14 @@ function clientApp() {
   let K = { on: false };
   const FIELD_ROWS = [["name", "Name"], ["age", "Age"], ["complaint", "Reason"], ["location", "Where"], ["pain", "Pain"], ["urgency", "Urgency"], ["preferred", "Best time"], ["notes", "Also"]];
   const canRecord = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
-  const sttAI = () => S.settings.sttEngine === "openai" && S.settings.hasOpenAI;
+  // iPhone dictation, unless this language has none on the iPhone: then OpenAI transcription, or typing without an OpenAI key
+  const dictationOk = () => !(S.settings.noDictation || {})[S.settings.lang];
+  const sttAI = () => S.settings.hasOpenAI && (S.settings.sttEngine === "openai" || !dictationOk());
+  const LANG_L = { en: "English", lt: "Lithuanian" };
+  function typeInstead(why) {
+    K.phase = "idle"; K.typing = true; K.focusType = true; renderCall();
+    if (!K.typeHint) { K.typeHint = true; toast(why); }
+  }
   function startCall(phone) {
     if (K.on) return;
     unlockAudio(); audioOn(aiTTS() ? "media" : "speech");   // inside the tap, so iOS lets Reva speak
@@ -1424,6 +1441,7 @@ function clientApp() {
     if (!K.on || !K.id || ["think", "listen", "ending", "saved"].includes(K.phase)) return;
     stopVoice();
     if (sttAI() && canRecord()) return startRecording();
+    if (!dictationOk()) return typeInstead(`iPhone dictation has no ${LANG_L[S.settings.lang]}, so type your answer.${S.settings.hasOpenAI ? "" : " An OpenAI key lets Reva transcribe you instead."}`);
     K.phase = "listen"; K.rec = null; renderCall();
     send("listen", { id: K.id });
   }
@@ -1431,11 +1449,17 @@ function clientApp() {
     // Dictation's answer counts while listening; a transcription's while it's being turned into text
     if (!K.on || id !== K.id || !(K.phase === "listen" || (K.phase === "think" && K.transcribing))) return;
     K.transcribing = false;
+    if (err === "unsupported") {   // found out just now: the state that says so came first, so this takes the other way
+      K.phase = "idle";
+      if (sttAI() && canRecord()) { toast(`iPhone dictation has no ${LANG_L[S.settings.lang]}, so OpenAI transcribes you instead`); return startRecording(); }
+      return typeInstead(`iPhone dictation has no ${LANG_L[S.settings.lang]}, so type your answer.${S.settings.hasOpenAI ? "" : " An OpenAI key lets Reva transcribe you instead."}`);
+    }
     if (!text) {
       K.phase = "idle"; renderCall();
       if (err && !/cancel/i.test(err)) toast("Didn't catch that: " + String(err).slice(0, 60) + ". Tap the microphone or type.");
       return;
     }
+    K.phase = "idle";   // a transcription arrives while the screen says "Turning your answer into text…"
     callerSays(text);
   };
   function callerSays(text) {
@@ -1471,13 +1495,40 @@ function clientApp() {
         };
         fr.readAsDataURL(blob);
       };
-      mr.start(); renderCall();
+      mr.start(); K.rec.auto = watchSilence(stream); renderCall();
     }).catch(() => {
       K.rec = null;
       try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
+      if (!dictationOk()) return typeInstead("Scriptable didn't let the page use the microphone, and iPhone dictation has no " + LANG_L[S.settings.lang] + ", so type your answer.");
       toast("The microphone isn't available here, so iPhone dictation listens instead");
+      K.phase = "listen"; renderCall();
       send("listen", { id: K.id });
     });
+  }
+  // Ends the answer by itself: once the caller has spoken and then paused (Settings › Calls › Stop listening after a pause of),
+  // after 10 s of silence from the start, or after 45 s in any case. Without Web Audio the caller taps Done.
+  function watchSilence(stream) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    try {
+      const ctx = new AC(), an = ctx.createAnalyser();
+      an.fftSize = 1024; ctx.createMediaStreamSource(stream).connect(an);
+      const buf = new Uint8Array(an.fftSize), t0 = Date.now(), r = K.rec;
+      let heard = false, quietSince = 0, floor = 0.01;
+      const iv = setInterval(() => {
+        const done = () => { clearInterval(iv); try { ctx.close(); } catch (e) {} };
+        if (K.rec !== r || !r.live) return done();
+        an.getByteTimeDomainData(buf);
+        let sum = 0; for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; sum += x * x; }
+        const rms = Math.sqrt(sum / buf.length), now = Date.now();
+        if (now - t0 < 300) floor = Math.max(floor, rms);   // the room's own noise, from the first moment
+        if (rms > Math.max(0.035, floor * 2.5)) { heard = true; quietSince = 0; }
+        else if (heard && !quietSince) quietSince = now;
+        const pause = (S.cfg.silenceStop || 1.2) * 1000;
+        if ((heard && quietSince && now - quietSince > pause) || (!heard && now - t0 > 10000) || now - t0 > 45000) { done(); stopRecording(false); }
+      }, 100);
+      return true;
+    } catch (e) { return false; }
   }
   function stopRecording(drop) {
     const r = K.rec;
@@ -1510,7 +1561,7 @@ function clientApp() {
   const PHONE_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 3.5h2.6l1.4 4.1-2 1.4a12.5 12.5 0 0 0 6.4 6.4l1.4-2 4.1 1.4v2.6c0 1-.8 1.8-1.8 1.8A16.2 16.2 0 0 1 4.8 5.3c0-1 .8-1.8 1.8-1.8z"/></svg>`;
   function phaseText() {
     const a = S.assistant;
-    return { ring: "Calling…", reva: `${a} is speaking`, idle: "Your turn to answer", listen: K.rec ? (K.rec.live ? "Recording. Tap when you're done" : "Opening the microphone…") : "Listening…",
+    return { ring: "Calling…", reva: `${a} is speaking`, idle: "Your turn to answer", listen: K.rec ? (K.rec.live ? (K.rec.auto ? "Listening. Just stop talking when you're done" : "Recording. Tap when you're done") : "Opening the microphone…") : "Listening…",
       think: K.transcribing ? "Turning your answer into text…" : `${a} is thinking…`, ending: "Writing the note for the front desk…", saved: "Call ended" }[K.phase] || "";
   }
   function micBtn() {
@@ -1610,7 +1661,7 @@ function clientApp() {
     if (!newNumber) newNumber = !isKnown && cur ? cur : "+370 6" + String(Math.floor(1e6 + Math.random() * 8.9e6)).slice(0, 2) + " " + String(Math.floor(10000 + Math.random() * 89999));
     const sel = isKnown ? cur : "new";
     const recent = S.calls.slice(0, 5);
-    const voice = aiTTS() ? "AI voice" : "iPhone voice", ears = sttAI() ? "OpenAI transcription" : "iPhone dictation";
+    const voice = aiTTS() ? "AI voice" : "iPhone voice", ears = sttAI() ? "OpenAI transcription" : dictationOk() ? "iPhone dictation" : "typing";
     return `<section class="hero">
       <h2 class="hero-h">Ring ${esc(S.clinic)}</h2>
       <p class="hero-p">${esc(S.assistant)}, the virtual receptionist, picks up, asks what's wrong, how much it hurts and when you can come, then leaves a note the front desk can book from.</p>
@@ -2195,7 +2246,7 @@ textarea.cfgin.wide{resize:vertical}
 #callsheet:not(.open){pointer-events:none}
 .c-top{display:flex;align-items:center;gap:12px;padding:calc(env(safe-area-inset-top) + 16px) 18px 6px}
 .c-top b{font:700 calc(18px * var(--ts))/1.2 var(--display);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.c-top small{display:block;opacity:.72;font-size:calc(12.5px * var(--ts));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c-top .grow small{display:block;color:inherit;opacity:.78;font-size:calc(12.5px * var(--ts));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .c-av{width:46px;height:46px;border-radius:23px;flex:none;display:grid;place-items:center;background:var(--signal-wash);color:var(--ink);font:800 calc(20px * var(--ts))/1 var(--rounded);position:relative}
 .c-av.talk::after,.c-av.ring::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--signal-wash);animation:halo 1.2s ease-out infinite}
 @keyframes halo{from{opacity:.9;transform:scale(.9)}to{opacity:0;transform:scale(1.35)}}
