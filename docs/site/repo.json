@@ -1,0 +1,9 @@
+{
+  "description": "Answer. Note. Book. A virtual receptionist demo for Scriptable on iPhone: call a dental clinic, Reva screens you by voice, and you book the visit as the front desk. AI is optional, with your own Claude or OpenAI key.",
+  "homepage": "https://github.com/gadominas/Frontly#install",
+  "topics": ["scriptable", "scriptable-app", "ios", "iphone", "javascript", "app-blueprints", "ai", "claude", "openai", "ios-widget", "virtual-receptionist", "voice-assistant", "speech-to-text", "text-to-speech", "dental-clinic", "appointment-booking"],
+  "install": {
+    "kept": "Your patients, calls and settings are kept.",
+    "firstRun": "Tap Call to ring the demo clinic; for a real conversation, add a Claude or OpenAI key in Settings › AI settings."
+  }
+}

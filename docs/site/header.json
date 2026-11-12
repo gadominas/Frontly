@@ -1,0 +1,18 @@
+{
+  "name": "Frontly",
+  "accent": "#F59BB5",
+  "headline": ["Answer.", "Note.", "Book."],
+  "sentence": "A patient calls the clinic. Reva, a virtual receptionist, asks the right questions and leaves a note the front desk can book from.",
+  "shots": [
+    { "card": "02-live-call.png", "y": 24 },
+    { "card": "04-front-desk.png", "y": 64 }
+  ],
+  "motif": {
+    "x": 0, "y": 540, "w": 592, "rotate": 0, "front": true,
+    "svg": "<svg viewBox='0 0 592 90' xmlns='http://www.w3.org/2000/svg'><path d='M6 52 H300 L322 52 L340 18 L364 82 L384 30 L400 52 H540' fill='none' stroke='#5EEAD4' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'/><circle cx='562' cy='52' r='18' fill='{accent}'/></svg>"
+  },
+  "benefit": "A virtual receptionist that screens every caller and leaves a note ready to book",
+  "steps": "Call the clinic. Answer Reva. Book the visit.",
+  "facts": "Free · iPhone and iPad · Runs in the free Scriptable app · A demo with made-up patients · AI is optional, with your own Claude or OpenAI key",
+  "bannerAlt": "Frontly: Answer. Note. Book. A patient calls a dental clinic, Reva the virtual receptionist asks the right questions and the front desk books the visit. Two iPhone screens show a live call with Reva's notes and the front desk queue, crossed by a teal voice line ending in a pink dot."
+}
