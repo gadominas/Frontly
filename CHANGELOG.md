@@ -2,6 +2,28 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.3.0 (2026-11-12): Smarter booking, and the clinic at a glance
+
+- 🗓️ **Calendar**: A new tab shows how full the clinic is: each dentist's day, the week and the month as percent taken, and trends with the busiest days and dentists.
+- ✨ **A time that fits**: Each call opens with a suggested time already selected: the right dentist, what the caller asked for ("after 3 pm", "Friday"), sooner when it's urgent. The AI weighs in when there's judgement to make.
+- 🛡️ **Visits that make sense**: A patient's visits never overlap and are kept apart, two surgeries leave time to heal, and a change of booking moves the visit instead of adding a second one.
+
+**Changes**
+
+- Front desk: a patient with several calls in a list gets one stacked card with all of them and their booked visits
+- Booking rules (Settings › Booking): days between a patient's visits (1) and between two surgeries (14); times that break them are struck through, with the reason
+- Suggested time from the caller's preference (hours, weekdays, tomorrow, next week), the note's dentist and the urgency; preselected
+- AI plan: picks from the allowed free times, explains why, warns, and offers alternatives; asked automatically for other visits, surgery or a change
+- A change of booking: Visit to move, then Move to …; the old visit is marked moved and its call shows where it went
+- Calendar tab: Day (each dentist's times), Week (heat grid), Month, Trends (weekly occupancy, busiest weekdays, dentists for the next two weeks, calls per day, four figures and three observations)
+- The made-up diary is busier on Mondays and mid-mornings and fills up nearer the day, so the calendar looks like a clinic's
+- Tests: 12-booking-rules (18 of 18 with the testkit); node bridge/test.mjs 14 checks
+
+**Fixes**
+
+- A change of booking was booked as a second visit next to the first
+- A preferred time on a card was cut off in the middle of a number
+
 ## 1.2.0 (2026-11-12): Returning callers, handled
 
 - 📅 **"When is my visit?"**: Reva knows each patient's booked visits and answers when, what time and with which dentist, without adding anything to the front desk's list.
