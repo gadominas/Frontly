@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -2264,7 +2264,7 @@ body.d-tiny{--pad:8px;--gap:7px}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{touch-action:pan-x pan-y;-webkit-user-select:none;user-select:none}
 input,textarea,.sum-t,.c-log{-webkit-user-select:text;user-select:text}
-html,body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:calc(16px * var(--ts));line-height:1.5;-webkit-text-size-adjust:100%}
+html,body{overflow-x:hidden;max-width:100%;margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:calc(16px * var(--ts));line-height:1.5;-webkit-text-size-adjust:100%}
 body.locked{overflow:hidden}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:inherit}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--signal);outline-offset:2px;border-radius:6px}
@@ -2322,7 +2322,7 @@ input,select,textarea{font-size:16px}
 .badge-ex{display:inline-block;font-size:calc(12px * var(--ts));font-weight:600;color:var(--ink-2);border:1px dashed var(--muted);border-radius:6px;padding:1px 8px}
 .busy-dot{width:15px;height:15px;flex:none;border-radius:50%;border:2px solid var(--rule);border-top-color:var(--signal);animation:spin .8s linear infinite}
 
-.sheet{position:fixed;inset:0;z-index:10;background:var(--paper);transform:translateY(102%);transition:transform .28s ease;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.sheet{position:fixed;inset:0;z-index:10;background:var(--paper);transform:translateY(102%);transition:transform .28s ease;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
 .sheet.open{transform:none}
 .sh-head{position:sticky;top:0;z-index:2;background:var(--paper);display:flex;justify-content:space-between;align-items:center;gap:12px;padding:calc(env(safe-area-inset-top) + 14px) 18px 12px;border-bottom:1px solid var(--rule)}
 .sh-head h2{font:700 calc(24px * var(--ts))/1.1 var(--display);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2382,9 +2382,9 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .block-h h3{font:700 calc(18px * var(--ts))/1.2 var(--display);margin:0}
 .crow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:12px 2px;border-bottom:1px solid var(--rule);position:relative}
 .crow .stripe{position:static;width:4px;align-self:stretch;border-radius:2px;flex:none}
-.pill{display:inline-flex;align-items:center;gap:4px;font-size:calc(12.5px * var(--ts));font-weight:650;border-radius:7px;padding:2px 8px;background:var(--paper);border:1px solid var(--rule);color:var(--ink-2);white-space:nowrap}
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:calc(12.5px * var(--ts));font-weight:650;line-height:1.35;border-radius:7px;padding:2px 8px;background:var(--paper);border:1px solid var(--rule);color:var(--ink-2);max-width:100%;min-width:0;overflow-wrap:anywhere;text-align:left}
 .pill.soft{font-weight:500}
-.pill.flag{color:var(--danger);border-color:var(--danger);background:var(--sheet)}
+.pill.flag{color:var(--danger);border-color:var(--danger);background:var(--sheet);align-items:flex-start;padding:4px 8px}
 .pill.st-waiting{color:var(--signal);border-color:var(--signal);background:var(--signal-wash)}
 .pill.st-booked{color:var(--ink);background:var(--sheet)}
 .pill.st-closed{color:var(--muted)}
@@ -2449,7 +2449,7 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .q-bk{font-size:calc(13.5px * var(--ts));font-weight:650;color:var(--signal);margin-top:6px}
 #casesheet,#patsheet{z-index:11}
 #casesheet{z-index:12}
-.sumbox{background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:14px 16px}
+.sumbox{background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:14px 16px;min-width:0;overflow-wrap:anywhere}
 .sumbox p{margin:8px 0 0;font-size:calc(16.5px * var(--ts));line-height:1.5}
 html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .bk{background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:6px 14px 14px}
