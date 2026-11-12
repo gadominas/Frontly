@@ -18,11 +18,11 @@
  *  - The BLUEPRINTS block below lists every shared blueprint this app follows (Settings › Built with)
  *
  * Data lives in iCloud Drive › Scriptable › Frontly (JSON files). Keys live in the iOS Keychain.
- * Everything here is a demo: the clinic, its dentists, the patients and the schedule are made up.
+ * A demo app: not for real patient records. The clinic, its dentists and its patients are whatever you enter.
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -112,7 +112,6 @@ const CONFIG = [
     { k: "slotMinutes", label: "Appointment length", unit: "min", def: 30, min: 15, max: 60, step: 15 },
     { k: "visitGapDays", label: "Days between a patient's visits", help: "0 allows two visits on one day (never at the same time); 1 keeps them on different days", unit: "days", def: 1, min: 0, max: 14, step: 1 },
     { k: "surgeryGapDays", label: "Days between two surgeries", help: "Healing time before the same patient can have another surgery", unit: "days", def: 14, min: 0, max: 60, step: 1 },
-    { k: "busyShare", label: "Demo: slots already taken", help: "The made-up share of each dentist's slots that other patients hold", unit: "%", def: 45, min: 0, max: 90, step: 5 },
   ]],
   ["Widget", [
     { k: "widgetRefreshMin", label: "Ask iOS to refresh every", help: "iOS decides the exact timing", unit: "min", def: 30, min: 15, max: 240, step: 15 },
@@ -155,13 +154,51 @@ const SPECIALTIES = {
   general: "General dentistry", endo: "Root canal and severe pain", surgery: "Oral surgery",
   ortho: "Braces and aligners", hygiene: "Cleaning and check-ups", kids: "Children's dentistry",
 };
-const DOCTORS = [
+// The dentists a fresh clinic is offered nothing of: they are added in Settings › Dentists. These five are only kept
+// for an install that already booked visits with them (before dentists could be edited), so those visits stay valid.
+const DEFAULT_DOCTORS = [
   { id: "d-kazl", name: "Dr. Rūta Kazlauskienė", short: "Dr. Kazlauskienė", role: "General dentist", spec: ["general", "kids"], days: [1, 2, 3, 4, 5], from: 8, to: 16 },
   { id: "d-petr", name: "Dr. Tomas Petraitis", short: "Dr. Petraitis", role: "Endodontist", spec: ["endo", "general"], days: [1, 3, 4, 5], from: 10, to: 18 },
   { id: "d-jank", name: "Dr. Marius Jankauskas", short: "Dr. Jankauskas", role: "Oral surgeon", spec: ["surgery"], days: [2, 4, 5], from: 9, to: 15 },
   { id: "d-vait", name: "Dr. Laura Vaitkutė", short: "Dr. Vaitkutė", role: "Orthodontist", spec: ["ortho", "kids"], days: [1, 2, 4], from: 12, to: 19 },
   { id: "d-stan", name: "Eglė Stankevičiūtė", short: "Eglė (hygienist)", role: "Dental hygienist", spec: ["hygiene"], days: [1, 2, 3, 4, 5], from: 8, to: 17 },
 ];
+const DOCTORS = [];       // the dentists who take bookings, from settings.doctors (setDoctors)
+const ALL_DOCTORS = [];   // and the removed ones whose visits are still on record, for their names
+function setDoctors() {
+  const all = (settings.doctors || []).filter(d => d && d.id && d.name && Array.isArray(d.days) && Array.isArray(d.spec));
+  ALL_DOCTORS.splice(0, ALL_DOCTORS.length, ...all);
+  DOCTORS.splice(0, DOCTORS.length, ...all.filter(d => !d.archived));
+}
+// Settings › Dentists › Save: checks the form and adds or updates a dentist. Returns what's wrong, or "".
+function saveDoctor(x) {
+  if (!x) return "Nothing to save";
+  const name = String(x.name || "").trim().slice(0, 60), role = String(x.role || "").trim().slice(0, 40) || "Dentist";
+  const spec = [...new Set((x.spec || []).filter(k => SPECIALTIES[k]))], days = [...new Set((x.days || []).map(Number).filter(d => d >= 0 && d <= 6))].sort();
+  const from = Math.round(Number(x.from)), to = Math.round(Number(x.to));
+  if (name.length < 2) return "Add the dentist's name";
+  if (!spec.length) return "Pick at least one kind of work";
+  if (!days.length) return "Pick at least one working day";
+  if (!(from >= 5 && to <= 23 && from < to)) return "Working hours: the start must come before the end";
+  const short = String(x.short || "").trim().slice(0, 30) || name;
+  const list = settings.doctors = settings.doctors || [];
+  const old = x.id && list.find(d => d.id === x.id);
+  const d = { id: old ? old.id : "d-" + Date.now().toString(36), name, short, role, spec, days, from, to };
+  if (old) Object.assign(old, d); else list.push(d);
+  setDoctors();
+  return "";
+}
+// Settings › Dentists › Remove: not while visits are booked; a dentist with past visits is kept out of sight for their names
+function removeDoctor(id) {
+  const d = (settings.doctors || []).find(x => x.id === id);
+  if (!d) return "";
+  const up = patients.reduce((n, p) => n + (p.appts || []).filter(a => a.doctor === id && a.status === "booked" && a.at > Date.now()).length, 0);
+  if (up) return `${d.short} has ${up} visit${up === 1 ? "" : "s"} booked. Move or cancel ${up === 1 ? "it" : "them"} first`;
+  if (patients.some(p => (p.appts || []).some(a => a.doctor === id)) || calls.some(c => c.booking && c.booking.doctor === id)) d.archived = true;
+  else settings.doctors = settings.doctors.filter(x => x.id !== id);
+  setDoctors();
+  return "";
+}
 // Booking rules for one patient, shared by the script (when booking) and the page (greying out times): visits may
 // not overlap, must be o.gapDays apart (0: the same day is fine, 1: different days), and two surgeries need
 // o.surgeryDays to heal. Returns why a time can't be booked, or "". Self-contained: it is also put into the page.
@@ -180,7 +217,7 @@ function visitConflict(appts, at, spec, o) {
   return "";
 }
 const ruleOpts = (ignore) => ({ slotMin: cfg("slotMinutes"), gapDays: cfg("visitGapDays"), surgeryDays: cfg("surgeryGapDays"), ignore,
-  specOf: a => a.spec || ((DOCTORS.find(d => d.id === a.doctor) || {}).spec || [])[0], docName: id => (DOCTORS.find(d => d.id === id) || {}).short || "the dentist" });
+  specOf: a => a.spec || ((ALL_DOCTORS.find(d => d.id === a.doctor) || {}).spec || [])[0], docName: id => (ALL_DOCTORS.find(d => d.id === id) || {}).short || "the dentist" });
 const DESK_STAFF = ["Agnė Petrauskaitė", "Mantas Jonaitis"];
 const DEMO_PIN = "1234";
 const MOODS = { calm: "🙂", cheerful: "😊", worried: "😟", anxious: "😰", "in pain": "😣", frustrated: "😤", upset: "😢", unsure: "😐" };
@@ -253,12 +290,19 @@ function startLog(msg) {
 let patients = [], calls = [], dataLoaded = false;
 async function loadData() {
   loadIssues.length = 0;   // loadRepaired is kept, so a damaged settings.json (read before this) still gets its toast
-  const firstRun = !fm.fileExists(P("patients")) && !fm.fileExists(P("calls"));
   patients = await load("patients", []);
   calls = await load("calls", []);
+  if (!Array.isArray(patients)) patients = [];
+  if (!Array.isArray(calls)) calls = [];
   usage = await load("usage", usage);
   dataLoaded = loadIssues.length === 0;   // anything missing: show what we have, save nothing over it
-  if (firstRun && dataLoaded) { const d = demoData(); patients = d.patients; calls = d.calls; }   // kept in memory; saved by saveAll()
+  if (!dataLoaded) return;
+  let changed = false;
+  if (!settings.demoGone) { changed = dropDemo(); settings.demoGone = true; }
+  // dentists: an install that already has data keeps the five it was booking with; a new clinic starts with none
+  if (!Array.isArray(settings.doctors)) { settings.doctors = patients.length || calls.length ? DEFAULT_DOCTORS.map(d => Object.assign({}, d)) : []; changed = true; }
+  setDoctors();
+  if (changed && !config.runsInWidget && !config.runsInAccessoryWidget) saveAll(false);   // a widget never writes the app's files; the app saves it next time
 }
 const settings = Object.assign(
   { ai: true, aiProvider: "anthropic", lastSession: 0,
@@ -278,48 +322,21 @@ function saveAll(touchSession = true) {
   write("settings", settings);
 }
 
-// ---------- demo data ----------
-// A few made-up patients and one call already waiting, so the front desk has something to work on at once.
-// Settings › Demo › Start the demo again brings this back.
-function demoData(now = Date.now()) {
-  const d = n => now - n * DAY;
-  const pts = [
-    { id: "p-jonas", name: "Jonas Petrauskas", age: 52, phone: "+370 612 34567", since: d(900), demo: true,
-      notes: [{ at: d(200), by: "Agnė Petrauskaitė", text: "Prefers early mornings. A little anxious about injections." }],
-      appts: [{ id: "a-j1", at: d(160), doctor: "d-stan", reason: "Cleaning and check-up", status: "done" },
-              { id: "a-j2", at: d(60), doctor: "d-kazl", reason: "Filling, lower left molar", status: "done" }] },
-    { id: "p-greta", name: "Greta Mikalauskaitė", age: 29, phone: "+370 698 76543", since: d(400), demo: true,
-      notes: [{ at: d(300), by: "Mantas Jonaitis", text: "Braces since spring; adjustments about every six weeks." }],
-      appts: [{ id: "a-g1", at: d(42), doctor: "d-vait", reason: "Braces adjustment", status: "done" }] },
-    { id: "p-andrius", name: "Andrius Kairys", age: 41, phone: "+370 655 11223", since: d(1500), demo: true,
-      notes: [], appts: [{ id: "a-a1", at: d(380), doctor: "d-petr", reason: "Root canal, upper right", status: "done" }] },
-  ];
-  const t0 = d(0.8);
-  const cl = [{
-    id: "c-demo1", at: t0, end: t0 + 151e3, dur: 151, phone: "+370 698 76543", patientId: "p-greta", isNew: false, lang: "en",
-    engine: "script", provider: "", demo: true,
-    transcript: [
-      { who: "reva", t: "Hello, you've reached Northlight Dental, this is Reva. Am I speaking with Greta?" },
-      { who: "caller", t: "Yes, hi, it's Greta." },
-      { who: "reva", t: "Hi Greta, good to hear from you again. What can we help you with today?" },
-      { who: "caller", t: "One of the brackets on my braces came loose and it's scratching my cheek." },
-      { who: "reva", t: "I'm sorry, that sounds uncomfortable. Where exactly is it?" },
-      { who: "caller", t: "Lower right, near the back." },
-      { who: "reva", t: "From 0 to 10, how strong is the pain?" },
-      { who: "caller", t: "Maybe a three. It's more annoying than painful." },
-      { who: "reva", t: "And how urgent does it feel, from 1 to 5?" },
-      { who: "caller", t: "A two. This week would be nice." },
-      { who: "reva", t: "When would suit you best?" },
-      { who: "caller", t: "Afternoons after three." },
-      { who: "reva", t: "Thank you, Greta. The front desk will call you back shortly to confirm a time. Goodbye!" },
-    ],
-    fields: { name: "Greta Mikalauskaitė", age: 29, complaint: "Loose bracket on braces, scratching the cheek", location: "Lower right, back", pain: 3, urgency: 2, preferred: "Afternoons after 3 pm, this week", notes: "" },
-    mood: null,
-    summary: { kind: "template", text: "Existing orthodontic patient with a loose bracket on the lower right that rubs her cheek. Pain 3/10, not urgent; wants an afternoon slot this week.",
-      triage: "routine", priority: 2, specialty: "ortho", reason: "Loose bracket", flags: [], hint: "Afternoon this week with the orthodontist" },
-    status: "waiting", deskNotes: [],
-  }];
-  return { patients: pts, calls: cl };
+// ---------- no made-up data ----------
+// Up to 1.3.0 a first start wrote three made-up patients and a waiting call (marked demo: true). They're removed
+// once. A made-up record a real phone call was filed under stays, without its made-up history.
+const DEMO_APPTS = ["a-j1", "a-j2", "a-g1", "a-a1"];
+function dropDemo() {
+  const fake = new Set(patients.filter(p => p.demo).map(p => p.id));
+  if (!fake.size && !calls.some(c => c.demo)) return false;
+  const keep = new Set(calls.filter(c => !c.demo && c.source === "phone" && fake.has(c.patientId)).map(c => c.patientId));
+  patients = patients.filter(p => !p.demo || keep.has(p.id)).map(p => {
+    if (!p.demo) return p;
+    delete p.demo; p.appts = (p.appts || []).filter(a => !DEMO_APPTS.includes(a.id) && a.callId); p.notes = (p.notes || []).filter(n => n.at > Date.parse("2026-11-11"));
+    return p;
+  });
+  calls = calls.filter(c => !c.demo && !(fake.has(c.patientId) && !keep.has(c.patientId)));
+  return true;
 }
 
 // ---------- AI (app-blueprints · ai-configuration) ----------
@@ -556,7 +573,7 @@ const digits = s => String(s || "").replace(/\D/g, "");
 const samePhone = (a, b) => { const x = digits(a), y = digits(b); return x.length >= 6 && y.length >= 6 && x.slice(-8) === y.slice(-8); };
 const patientByPhone = ph => patients.find(p => samePhone(p.phone, ph));
 const firstName = n => String(n || "").trim().split(/\s+/)[0] || "";
-const docById = id => DOCTORS.find(d => d.id === id);
+const docById = id => ALL_DOCTORS.find(d => d.id === id);
 const FIELD_KEYS = ["name", "age", "complaint", "location", "pain", "urgency", "preferred", "notes"];
 const LANG_NAME = { en: "English", lt: "Lithuanian" };
 
@@ -741,7 +758,7 @@ const doctorFor = spec => DOCTORS.find(d => d.spec[0] === spec) || DOCTORS.find(
 const PRIORITY = { emergency: 5, urgent: 4, soon: 3, routine: 2 };
 function templateSummary(c) {
   const f = c.fields, all = c.transcript.filter(x => x.who === "caller").map(x => x.t).join(" ") + " " + (f.complaint || "") + " " + (f.notes || "");
-  const triage = triageOf(f, all), spec = specialtyOf(all), doc = doctorFor(spec);
+  const triage = triageOf(f, all), spec = specialtyOf(all), doc = doctorFor(spec) || { id: "", short: "" };
   const bits = [
     `${c.isNew ? "New caller" : "Existing patient"} ${f.name || "(name not given)"}${f.age ? ", " + f.age : ""}.`,
     f.complaint ? `${f.complaint}${f.location ? " (" + f.location + ")" : ""}.` : "No reason given.",
@@ -754,7 +771,7 @@ function templateSummary(c) {
   if (/(fever|karšč|temperat)/i.test(all)) flags.push("Fever");
   if (/(bleed|kraujav)/i.test(all)) flags.push("Bleeding");
   return { kind: "template", text: bits.join(" "), triage, priority: PRIORITY[triage], specialty: spec, doctor: doc.id,
-    reason: String(f.complaint || "Call back").split(/\s+/).slice(0, 6).join(" "), flags, hint: `${f.preferred ? f.preferred.slice(0, 40) + " · " : ""}${doc.short}` };
+    reason: String(f.complaint || "Call back").split(/\s+/).slice(0, 6).join(" "), flags, hint: [f.preferred ? f.preferred.slice(0, 40) : "", doc.short].filter(Boolean).join(" · ") };
 }
 async function aiSummary(c) {
   const pt = c.patientId && patients.find(p => p.id === c.patientId);
@@ -953,7 +970,7 @@ When you're done, or the caller wants to stop, say a short goodbye (mention the 
 // ---------- front desk ----------
 function bookCall(m) {
   const c = calls.find(x => x.id === m.id), doc = docById(m.doctor), at = Number(m.at);
-  if (!c || !doc || !isFinite(at)) return "That booking couldn't be made";
+  if (!c || !doc || doc.archived || !isFinite(at)) return "That booking couldn't be made";
   if (!settings.deskUser) return "Sign in to the front desk first";
   const taken = patients.some(p => (p.appts || []).some(a => a.doctor === doc.id && a.at === at && a.status === "booked"));
   if (taken) return "That time was just taken. Pick another one";
@@ -1024,7 +1041,7 @@ async function aiPlan(m) {
 function clientState() {
   return {
     patients, calls: calls.slice(0, 200),
-    doctors: DOCTORS, specialties: SPECIALTIES, staff: DESK_STAFF, demoPin: DEMO_PIN, moods: MOODS,
+    doctors: DOCTORS, allDoctors: ALL_DOCTORS, specialties: SPECIALTIES, staff: DESK_STAFF, demoPin: DEMO_PIN, moods: MOODS,
     clinic: cfg("clinicName"), assistant: cfg("assistantName"),
     ai: {
       provider: settings.aiProvider,
@@ -1149,10 +1166,21 @@ async function handle(m) {
     }
     case "secret-set": if (SECRETS[m.v] && await askSecret(m.v)) toast(`${SECRETS[m.v].name} saved`); return push();
     case "secret-remove": if (SECRETS[m.v] && Keychain.contains(SECRETS[m.v].key)) { Keychain.remove(SECRETS[m.v].key); toast(`${SECRETS[m.v].name} removed`); } return push();
-    case "demo-reset": {
-      const d = demoData(); patients = d.patients; calls = d.calls;
-      if (dataLoaded) { saveAll(); saveWidget(widgetSnapshot()); toast("The demo starts again: 3 patients, 1 call waiting"); }
+    case "data-clear": {
+      if (!dataLoaded) return;
+      patients = []; calls = [];
+      saveAll(); saveWidget(widgetSnapshot()); toast("All calls and patients removed");
       return push();
+    }
+    case "doctor-save": {
+      const err = saveDoctor(m.doctor);
+      if (err) { toast(err); return call("__done", m.req, false, err); }
+      saveAll(); toast("Dentist saved"); push(); return call("__done", m.req, true, "");
+    }
+    case "doctor-remove": {
+      const err = removeDoctor(m.id);
+      if (err) { toast(err); return push(); }
+      saveAll(); toast("Dentist removed"); return push();
     }
     // ── shared: settings, AI, updates ──
     case "set":
@@ -1308,6 +1336,33 @@ function clientApp() {
       : `<small class="muted wrap">No ${lang === "lt" ? "Lithuanian" : "English"} voices were found. Add one in iOS Settings › Accessibility › Spoken Content › Voices.</small>`}
       <button class="sm" data-act="voicetest">Hear Reva</button></div>`;
   }
+  // Settings › Dentists: the list, and one dentist's form at a time
+  let dent = null, dentErr = "", dentArmed = "";
+  const DAYS_L = [[1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"], [5, "Fri"], [6, "Sat"], [0, "Sun"]];
+  const daysText = ds => DAYS_L.filter(([d]) => ds.includes(d)).map(([, l]) => l).join(", ");
+  function dentistsHTML() {
+    const rows = S.doctors.map(d => dent && dent.id === d.id ? dentForm() : `<div class="srow"><div class="grow"><b>${esc(d.name)}</b><small class="muted wrap">${esc(d.role)} · ${esc(daysText(d.days))} · ${pad2(d.from)}:00–${pad2(d.to)}:00</small></div><button class="sm" data-act="dentedit" data-id="${esc(d.id)}">Edit</button></div>`).join("");
+    return `${rows || `<p class="muted pad-s">No dentists yet. Add each dentist with their working days and hours; bookings and the calendar use them.</p>`}
+      ${dent && !dent.id ? dentForm() : `<div class="srow"><div class="grow"><b>Add a dentist</b></div><button class="sm primary" data-act="dentnew">Add</button></div>`}`;
+  }
+  function dentForm() {
+    const d = dent, opt = (v, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${pad2(v)}:00</option>`, hrs = []; for (let h = 5; h <= 23; h++) hrs.push(h);
+    return `<div class="dform" role="group" aria-label="${d.id ? "Edit dentist" : "New dentist"}">
+      <label class="lbl-s" for="dn">Full name</label><input id="dn" class="cfgin wide" value="${esc(d.name)}" placeholder="Dr. Rūta Kazlauskienė" autocomplete="off">
+      <label class="lbl-s" for="ds">Short name <span class="muted">(on cards and the calendar)</span></label><input id="ds" class="cfgin wide" value="${esc(d.short)}" placeholder="Dr. Kazlauskienė" autocomplete="off">
+      <label class="lbl-s" for="dr">Role</label><input id="dr" class="cfgin wide" value="${esc(d.role)}" placeholder="General dentist" autocomplete="off">
+      <span class="lbl-s">Does</span><div class="chips">${Object.entries(S.specialties).map(([k, l]) => `<button class="chip ${d.spec.includes(k) ? "on" : ""}" data-act="dentspec" data-v="${k}" aria-pressed="${d.spec.includes(k)}">${esc(l)}</button>`).join("")}</div>
+      <span class="lbl-s">Works on</span><div class="chips">${DAYS_L.map(([n, l]) => `<button class="chip ${d.days.includes(n) ? "on" : ""}" data-act="dentday" data-v="${n}" aria-pressed="${d.days.includes(n)}">${l}</button>`).join("")}</div>
+      <div class="dhours"><label class="lbl-s" for="dfrom">From</label><select id="dfrom" class="voicesel dsel">${hrs.map(h => opt(h, d.from)).join("")}</select>
+        <label class="lbl-s" for="dto">Until</label><select id="dto" class="voicesel dsel">${hrs.map(h => opt(h, d.to)).join("")}</select></div>
+      ${dentErr ? `<p class="err">${esc(dentErr)}</p>` : ""}
+      <div class="aic-btns"><button class="sm primary" data-act="dentsave">Save</button><button class="sm" data-act="dentcancel">Cancel</button>${d.id ? `<button class="sm danger ${dentArmed === d.id ? "armed" : ""}" data-act="dentdel" data-id="${esc(d.id)}">${dentArmed === d.id ? "Confirm" : "Remove"}</button>` : ""}</div></div>`;
+  }
+  function readDent() {   // keep what was typed when the form is drawn again
+    if (!dent) return;
+    const v = id => { const el = $("#" + id); return el ? el.value : null; };
+    if (v("dn") != null) { dent.name = v("dn"); dent.short = v("ds"); dent.role = v("dr"); dent.from = +v("dfrom"); dent.to = +v("dto"); }
+  }
   function renderCfg() {
     const el = $("#cfgsheet"), keepTop = el.scrollTop;
     el.classList.toggle("open", cfgOpen); lockBody();
@@ -1337,9 +1392,10 @@ function clientApp() {
         <button class="sm ${st.hasKey ? "" : "primary"}" data-act="aiopen">AI settings</button></div>
       <h3 class="sec">Front desk</h3>
       <div class="srow"><div class="grow"><b>${st.deskUser ? "Signed in as " + esc(st.deskUser) : "Not signed in"}</b><small class="muted wrap">The receptionist's view of the calls Reva took</small></div>${st.deskUser ? `<button class="sm" data-act="signout">Sign out</button>` : `<button class="sm" data-act="gotab" data-v="desk">Sign in</button>`}</div>
+      <h3 class="sec" id="dentists">Dentists</h3>${dentistsHTML()}
       <h3 class="sec">Phone line</h3>${lineHTML()}
-      <h3 class="sec">Demo</h3>
-      <div class="srow"><div class="grow"><b>Start the demo again</b><small class="muted wrap">Puts back the three demo patients and the one waiting call. Every call and booking made since is removed.</small></div><button class="sm danger ${demoArmed ? "armed" : ""}" data-act="demoreset">${demoArmed ? "Confirm" : "Start again"}</button></div>
+      <h3 class="sec">Data</h3>
+      <div class="srow"><div class="grow"><b>Remove all calls and patients</b><small class="muted wrap">Starts the front desk empty. Dentists and settings stay.</small></div><button class="sm danger ${demoArmed ? "armed" : ""}" data-act="demoreset">${demoArmed ? "Confirm" : "Remove all"}</button></div>
       <h3 class="sec">Updates</h3>
       ${S.nativeShell
         ? `<div class="srow"><div class="grow"><b>Updates</b><small class="muted wrap">You have Frontly ${esc(S.version)}. New versions come through the App Store (or TestFlight).</small></div></div>`
@@ -1885,7 +1941,7 @@ function clientApp() {
   // ── main screens: Call, Front desk, Patients ──
   const byCall = id => S.calls.find(c => c.id === id);
   const byPatient = id => S.patients.find(p => p.id === id);
-  const docOf = id => S.doctors.find(d => d.id === id);
+  const docOf = id => (S.allDoctors || S.doctors).find(d => d.id === id);   // removed dentists too, for names in the history
   const waiting = () => S.calls.filter(c => c.status === "waiting");
   const TRIAGE_L = { emergency: "Emergency", urgent: "Urgent", soon: "Soon", routine: "Routine" };
   const triagePill = t => t ? `<span class="pill tri-${esc(t)}">${TRIAGE_L[t] || esc(t)}</span>` : "";
@@ -2015,22 +2071,12 @@ function clientApp() {
     for (let i = 0, d = sod(Date.now()); out.length < n && i < 60; i++, d = sod(d + DAY + 3600e3)) if (doc.days.includes(new Date(d).getDay())) out.push(d);
     return out;
   }
-  // The made-up patients who fill the rest of the diary: busier on Mondays and mid-morning, quieter further ahead
-  const DOW_BIAS = [0, 12, 4, 0, 6, -8, 0];
-  function mockTaken(doc, t) {
-    const busy = S.cfg.busyShare == null ? 45 : S.cfg.busyShare;
-    if (!busy) return false;
-    const d = new Date(t), h = d.getHours(), ahead = Math.max(0, Math.round((sod(t) - sod(Date.now())) / DAY));
-    let share = busy + DOW_BIAS[d.getDay()] + (Math.floor(sod(t) / (7 * DAY)) * 37 % 13 - 6) + (h >= 9 && h < 12 ? 8 : h >= 16 ? -6 : 0);
-    if (ahead > 0) share *= 1 - Math.min(0.55, ahead * 0.035);
-    return hash(doc.id + dkey(t) + t) % 100 < Math.max(0, Math.min(95, share));
-  }
   const slotTimes = (doc, day) => { const step = (S.cfg.slotMinutes || 30) * 60e3, out = []; for (let t = day + doc.from * 3600e3; t + step <= day + doc.to * 3600e3; t += step) out.push(t); return out; };
   // rule(t): why this patient can't have that time (the booking rules), or ""
   function slotsFor(doc, day, rule) {
     const taken = bookedAt(doc.id);
     return slotTimes(doc, day).filter(t => t >= Date.now() + 3600e3)   // not within the next hour
-      .map(t => ({ at: t, free: !mockTaken(doc, t) && !taken.has(t), why: rule ? rule(t) : "" }));
+      .map(t => ({ at: t, free: !taken.has(t), why: rule ? rule(t) : "" }));
   }
   const usable = x => x.free && !x.why;
   // The booking rules for this call's patient (visitConflict is shared with the script)
@@ -2111,7 +2157,7 @@ function clientApp() {
     caseId = id; caseArmed = ""; showTx = false; caseSlot = 0; caseDay = 0;
     const up = upcomingOf(byPatient(c.patientId));
     caseMove = c.status === "waiting" && c.intent === "change_visit" && up.length ? ((c.plan && c.plan.move) || up[0].id) : "";
-    caseDoc = (c.booking && c.booking.doctor) || (c.summary && c.summary.doctor) || S.doctors[0].id;
+    caseDoc = (c.booking && c.booking.doctor) || (c.summary && c.summary.doctor) || (S.doctors[0] || {}).id || "";
     caseSug = c.status === "waiting" ? suggest(c, caseMove) : null;
     if (caseSug) useTime(caseSug.doctor, caseSug.at);
     renderCase(); $("#casesheet").scrollTop = 0;
@@ -2145,7 +2191,8 @@ function clientApp() {
         <div class="aic-btns">${w ? `<button class="sm" data-act="opencase" data-id="${esc(w.id)}">Open the waiting request</button>` : ""}<button class="sm" data-act="reopen" data-id="${esc(c.id)}">Move to To book</button></div></div>`;
     }
     if (c.status === "closed") return `<div class="booked closed"><b>Closed without booking</b><span class="muted">${c.closedBy ? "by " + esc(c.closedBy) : ""}</span><div class="aic-btns"><button class="sm" data-act="reopen" data-id="${esc(c.id)}">Reopen</button></div></div>`;
-    const doc = docOf(caseDoc) || S.doctors[0], s = c.summary || {}, pf = prefers(c), pt = byPatient(c.patientId), up = upcomingOf(pt);
+    if (!S.doctors.length) return noDentists("Then pick one here and book.");
+    const doc = (S.doctors.find(d => d.id === caseDoc)) || S.doctors[0], s = c.summary || {}, pf = prefers(c), pt = byPatient(c.patientId), up = upcomingOf(pt);
     const mv = caseMove && up.find(a => a.id === caseMove), rule = ruleFor(c, caseMove, doc.id);
     const days = workDays(doc);
     if (!caseDay || !days.includes(caseDay)) { caseDay = (days.find(d => slotsFor(doc, d, rule).some(usable)) || days[0] || 0); caseSlot = 0; }
@@ -2284,8 +2331,7 @@ function clientApp() {
   }
   const digitsOf = s => String(s || "").replace(/\D/g, "");
   const clip = (x, n) => { x = String(x || ""); return x.length <= n ? x : x.slice(0, n).replace(/[\s,;:.]+\S*$/, "") + "…"; };   // at a word, not mid-number
-  // Calendar: how full the clinic is by day, week and month, and the trends. The diary is the made-up patients
-  // (mockTaken) plus the visits booked in Frontly.
+  // Calendar: how full the clinic is by day, week and month, and the trends, from the visits booked in Frontly.
   let calView = "week", calDay = 0;
   const calCache = new Map();
   function load(doc, day) {
@@ -2294,7 +2340,7 @@ function clientApp() {
     if (calCache.has(key)) return calCache.get(key);
     const ours = new Map();
     S.patients.forEach(p => (p.appts || []).forEach(a => { if (a.doctor === doc.id && (a.status === "booked" || a.status === "done") && a.at >= day && a.at < day + DAY) ours.set(a.at, { p, a }); }));
-    const cells = slotTimes(doc, day).map(t => ours.has(t) ? { t, k: "ours", x: ours.get(t) } : mockTaken(doc, t) ? { t, k: "taken" } : { t, k: "free" });
+    const cells = slotTimes(doc, day).map(t => ours.has(t) ? { t, k: "ours", x: ours.get(t) } : { t, k: "free" });
     const used = cells.filter(c => c.k !== "free").length, r = { cells, used, total: cells.length, ours: cells.filter(c => c.k === "ours").length, pct: cells.length ? Math.round(used * 100 / cells.length) : 0 };
     calCache.set(key, r); return r;
   }
@@ -2314,17 +2360,23 @@ function clientApp() {
   const heat = pct => `<span class="heat" style="opacity:${(0.08 + Math.min(1, pct / 100) * 0.62).toFixed(2)}"></span>`;
   const fmtD = (t, o) => new Date(t).toLocaleDateString(undefined, o);
   const vsLast = (a, b, unit = " points") => a === b ? "the same as" : `${a > b ? "▲ up" : "▼ down"} ${Math.abs(a - b)}${unit} on`;
+  const CHEV_L = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const CHEV_R = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  // "today" is in view: the day itself, its week, its month
+  const isNow = () => { const t = sod(Date.now()); return calView === "day" ? calDay === t : calView === "week" ? monday(calDay) === monday(t) : new Date(calDay).getMonth() === new Date(t).getMonth() && new Date(calDay).getFullYear() === new Date(t).getFullYear(); };
+  const noDentists = (what) => `<div class="empty"><h2>No dentists yet</h2><p>Add the clinic's dentists in Settings › Dentists, with their days and hours. ${what}</p><button class="primary" data-act="dentnew">Add a dentist</button></div>`;
   function calHTML() {
     calCache.clear();
+    if (!S.doctors.length) return `<div class="calwrap">${noDentists("The calendar shows how full each of them is.")}</div>`;
     if (!calDay) calDay = sod(Date.now());
     const views = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["trends", "Trends"]];
     const title = calView === "day" ? fmtD(calDay, { weekday: "long", day: "numeric", month: "long" })
       : calView === "week" ? `${fmtD(monday(calDay), { day: "numeric", month: "short" })} – ${fmtD(addDays(monday(calDay), 4), { day: "numeric", month: "short" })}`
       : calView === "month" ? fmtD(calDay, { month: "long", year: "numeric" }) : "Trends";
     return `<div class="segbar"><div class="seg wide">${views.map(([v, l]) => `<button class="${calView === v ? "on" : ""}" data-act="calview" data-v="${v}" aria-pressed="${calView === v}">${l}</button>`).join("")}</div></div>
-      <div class="calwrap">${calView === "trends" ? "" : `<div class="calnav"><button class="cn-b" data-act="calstep" data-v="-1" aria-label="Earlier">‹</button><b>${esc(title)}</b><button class="cn-b" data-act="calstep" data-v="1" aria-label="Later">›</button>${sod(calDay) !== sod(Date.now()) ? `<button class="link small" data-act="caltoday">Today</button>` : ""}</div>`}
+      <div class="calwrap">${calView === "trends" ? "" : `<div class="calnav"><button class="cn-b" data-act="calstep" data-v="-1" aria-label="${calView === "day" ? "Previous day" : calView === "week" ? "Previous week" : "Previous month"}">${CHEV_L}</button><span class="cn-t"><b>${esc(title)}</b>${isNow() ? "" : `<button class="cn-today" data-act="caltoday">Back to today</button>`}</span><button class="cn-b" data-act="calstep" data-v="1" aria-label="${calView === "day" ? "Next day" : calView === "week" ? "Next week" : "Next month"}">${CHEV_R}</button></div>`}
       ${calView === "day" ? calDayHTML() : calView === "week" ? calWeekHTML() : calView === "month" ? calMonthHTML() : calTrendsHTML()}
-      <p class="note cal-k"><i class="k taken"></i> Other patients (made up) <i class="k ours"></i> Booked in Frontly <i class="k free"></i> Free</p></div>`;
+      ${calView === "trends" ? "" : `<p class="note cal-k"><i class="k ours"></i> Booked <i class="k free"></i> Free</p>`}</div>`;
   }
   function calDayHTML() {
     const cl = clinicLoad(calDay);
@@ -2335,24 +2387,24 @@ function clientApp() {
       if (!l) return `<div class="cdoc off"><div class="cd-h"><b>${esc(d.short)}</b><small>Not working</small></div></div>`;
       l.cells.filter(c => c.k === "ours").forEach(c => ours.push(Object.assign({ d }, c)));
       return `<div class="cdoc"><div class="cd-h"><b>${esc(d.short)}</b><small>${esc(d.role)}</small><span class="cd-p">${l.pct}%</span></div>
-        <div class="strip" role="img" aria-label="${esc(d.short)}: ${l.used} of ${l.total} times taken">${l.cells.map(c => `<i class="${c.k}" title="${hhmm(c.t)}"></i>`).join("")}</div>
+        <div class="strip" role="img" aria-label="${esc(d.short)}: ${l.used} of ${l.total} times booked">${l.cells.map(c => `<i class="${c.k}" title="${hhmm(c.t)}"></i>`).join("")}</div>
         <div class="ticks"><span>${pad2(d.from)}:00</span><span>${pad2(Math.round((d.from + d.to) / 2))}:00</span><span>${pad2(d.to)}:00</span></div></div>`;
     }).join("");
     ours.sort((a, b) => a.t - b.t);
-    return `<div class="calsum"><b>${cl.pct}%</b><span>of the day's times are taken<small>${cl.used} of ${cl.total} · ${cl.ours} booked in Frontly</small></span></div>
+    return `<div class="calsum"><b>${cl.pct}%</b><span>of the day's times are booked<small>${cl.used} of ${cl.total} times</small></span></div>
       ${rows}
-      <h3 class="sec2">Booked in Frontly</h3>
-      ${ours.length ? ours.map(o => `<button class="crow" data-act="openpat" data-id="${esc(o.x.p.id)}"><span class="cr-t">${hhmm(o.t)}</span><span class="grow"><b>${esc(o.x.p.name)}</b><small>${esc(o.x.a.reason || "Visit")} · ${esc(o.d.short)}${o.x.a.status === "done" ? " · done" : ""}</small></span><span class="chev">›</span></button>`).join("") : `<p class="muted">No visits booked in Frontly on this day.</p>`}`;
+      <h3 class="sec2">Visits</h3>
+      ${ours.length ? ours.map(o => `<button class="crow" data-act="openpat" data-id="${esc(o.x.p.id)}"><span class="cr-t">${hhmm(o.t)}</span><span class="grow"><b>${esc(o.x.p.name)}</b><small>${esc(o.x.a.reason || "Visit")} · ${esc(o.d.short)}${o.x.a.status === "done" ? " · done" : ""}</small></span><span class="chev">›</span></button>`).join("") : `<p class="muted">No visits booked on this day.</p>`}`;
   }
   function calWeekHTML() {
     const days = weekDays(calDay), today = sod(Date.now());
     const head = `<tr><th></th>${days.map(d => `<th class="${d === today ? "today" : ""}">${esc(fmtD(d, { weekday: "short" }))}<small>${new Date(d).getDate()}</small></th>`).join("")}</tr>`;
-    const body = S.doctors.map(doc => `<tr><th class="rh" title="${esc(doc.name)}">${esc(shortDoc(doc))}</th>${days.map(d => { const l = load(doc, d); return l ? `<td><button class="hcell" data-act="calday" data-v="${d}" aria-label="${esc(doc.short)}, ${esc(fmtD(d, { weekday: "long" }))}: ${l.pct}%">${heat(l.pct)}<b>${l.pct}</b>${l.ours ? `<i class="dot" aria-hidden="true"></i>` : ""}</button></td>` : `<td><span class="hcell off">–</span></td>`; }).join("")}</tr>`).join("");
+    const body = S.doctors.map(doc => `<tr><th class="rh" title="${esc(doc.name)}">${esc(shortDoc(doc))}</th>${days.map(d => { const l = load(doc, d); return l ? `<td><button class="hcell" data-act="calday" data-v="${d}" aria-label="${esc(doc.short)}, ${esc(fmtD(d, { weekday: "long" }))}: ${l.pct}%">${heat(l.pct)}<b>${l.pct}</b></button></td>` : `<td><span class="hcell off">–</span></td>`; }).join("")}</tr>`).join("");
     const foot = `<tr class="tot"><th class="rh">Clinic</th>${days.map(d => { const l = clinicLoad(d); return `<td><button class="hcell" data-act="calday" data-v="${d}">${heat(l ? l.pct : 0)}<b>${l ? l.pct : "–"}</b></button></td>`; }).join("")}</tr>`;
     const w = weekLoad(calDay), prev = weekLoad(addDays(calDay, -7));
-    return `<div class="calsum"><b>${w}%</b><span>of the week's times are taken<small>${vsLast(w, prev)} the week before (${prev}%)</small></span></div>
+    return `<div class="calsum"><b>${w}%</b><span>of the week's times are booked<small>${vsLast(w, prev)} the week before (${prev}%)</small></span></div>
       <div class="hscroll"><table class="heatgrid"><col class="rhc">${head}${body}${foot}</table></div>
-      <p class="note">Numbers are percent taken. A dot: someone booked in Frontly. Tap a day to see it.</p>`;
+      <p class="note">Numbers are percent booked. Tap a day to see it.</p>`;
   }
   function calMonthHTML() {
     const d0 = new Date(calDay); d0.setDate(1); d0.setHours(0, 0, 0, 0);
@@ -2362,10 +2414,10 @@ function clientApp() {
       const d = addDays(start, i);
       if (i >= 35 && new Date(d).getMonth() !== month) break;
       const inM = new Date(d).getMonth() === month, l = inM ? clinicLoad(d) : null;
-      cells.push(!inM ? `<span class="mcell out"></span>` : l ? `<button class="mcell" data-act="calday" data-v="${d}" aria-label="${esc(fmtD(d, { day: "numeric", month: "long" }))}: ${l.pct}%">${heat(l.pct)}<small class="${d === today ? "today" : ""}">${new Date(d).getDate()}</small><b>${l.pct}%</b>${l.ours ? `<i class="dot"></i>` : ""}</button>` : `<span class="mcell closed"><small>${new Date(d).getDate()}</small></span>`);
+      cells.push(!inM ? `<span class="mcell out"></span>` : l ? `<button class="mcell" data-act="calday" data-v="${d}" aria-label="${esc(fmtD(d, { day: "numeric", month: "long" }))}: ${l.pct}%">${heat(l.pct)}<small class="${d === today ? "today" : ""}">${new Date(d).getDate()}</small><b>${l.pct}%</b></button>` : `<span class="mcell closed"><small>${new Date(d).getDate()}</small></span>`);
     }
     let used = 0, total = 0; for (let d = first; new Date(d).getMonth() === month; d = addDays(d, 1)) { const l = clinicLoad(d); if (l) { used += l.used; total += l.total; } }
-    return `<div class="calsum"><b>${total ? Math.round(used * 100 / total) : 0}%</b><span>of the month's times are taken<small>${used} of ${total} times</small></span></div>
+    return `<div class="calsum"><b>${total ? Math.round(used * 100 / total) : 0}%</b><span>of the month's times are booked<small>${used} of ${total} times</small></span></div>
       <div class="month">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(x => `<span class="mh">${x}</span>`).join("")}${cells.join("")}</div>`;
   }
   function bars(items, unit) {
@@ -2375,7 +2427,7 @@ function clientApp() {
   function calTrendsHTML() {
     const now = sod(Date.now()), wk = monday(now);
     const weeks = []; for (let i = -7; i <= 3; i++) { const m = addDays(wk, i * 7); weeks.push({ label: `${new Date(m).getDate()}/${new Date(m).getMonth() + 1}`, v: weekLoad(m), cls: i === 0 ? "now" : i > 0 ? "ahead" : "" }); }
-    const wdays = [1, 2, 3, 4, 5].map(dw => { let s = 0, n = 0; for (let i = -8; i < 0; i++) { const l = clinicLoad(addDays(wk, i * 7 + dw - 1)); if (l) { s += l.pct; n++; } } return { label: fmtD(addDays(wk, dw - 1), { weekday: "short" }), long: fmtD(addDays(wk, dw - 1), { weekday: "long" }), v: n ? Math.round(s / n) : 0, dw }; });
+    const wdays = [1, 2, 3, 4, 5].map(dw => { let s = 0, n = 0; for (let i = -8; i <= 1; i++) { const l = clinicLoad(addDays(wk, i * 7 + dw - 1)); if (l) { s += l.pct; n++; } } return { label: fmtD(addDays(wk, dw - 1), { weekday: "short" }), long: fmtD(addDays(wk, dw - 1), { weekday: "long" }), v: n ? Math.round(s / n) : 0, dw }; });
     const next14 = []; for (let i = 0; i < 14; i++) next14.push(addDays(now, i));
     const docs = S.doctors.map(d => { let used = 0, total = 0; next14.forEach(t => { const l = load(d, t); if (l) { used += l.used; total += l.total; } }); return { d, label: shortDoc(d), v: total ? Math.round(used * 100 / total) : 0 }; });
     const days14 = []; for (let i = 13; i >= 0; i--) { const d = addDays(now, -i), cs = S.calls.filter(c => sod(c.at) === d); days14.push({ label: String(new Date(d).getDate()), v: cs.length, v2: cs.filter(c => ["emergency", "urgent"].includes((c.summary || {}).triage)).length, cls: d === now ? "now" : "" }); }
@@ -2386,18 +2438,21 @@ function clientApp() {
     const hot = docs.slice().sort((a, b) => b.v - a.v)[0], spare = docs.filter(x => x.d !== hot.d && x.d.spec.some(sp => hot.d.spec.includes(sp))).sort((a, b) => a.v - b.v)[0];
     const insights = [
       `${busiest.long} is the busiest day (${busiest.v}% on average), ${quiet.long} the quietest (${quiet.v}%): offer ${quiet.long} first to anyone flexible.`,
-      hot.v >= 70 ? `${hot.d.short} is ${hot.v}% taken for the next two weeks${spare ? `; ${spare.d.short} covers some of the same work and is at ${spare.v}%` : ""}.` : `No dentist is over 70% for the next two weeks; ${hot.d.short} is the fullest at ${hot.v}%.`,
-      `This week is ${thisW}% taken, ${vsLast(thisW, lastW).replace(/^[▲▼] /, "")} last week.`,
+      hot.v >= 70 ? `${hot.d.short} is ${hot.v}% booked for the next two weeks${spare ? `; ${spare.d.short} covers some of the same work and is at ${spare.v}%` : ""}.` : `No dentist is over 70% for the next two weeks; ${hot.d.short} is the fullest at ${hot.v}%.`,
+      `This week is ${thisW}% booked, ${vsLast(thisW, lastW).replace(/^[▲▼] /, "")} last week.`,
     ];
+    const anything = weeks.some(x => x.v) || days14.some(x => x.v);
+    if (!anything) return `<div class="empty"><h2>No trends yet</h2><p>They appear as calls come in and visits are booked: how full each week is, the busiest days and dentists, and the calls per day.</p></div>`;
+    if (!busiest.v) insights.shift();
     return `<div class="tiles">
-        <div class="tile"><small>This week</small><b>${thisW}%</b><span>${vsLast(thisW, lastW)} last week</span></div>
-        <div class="tile"><small>Next two weeks</small><b>${Math.round(docs.reduce((n, x) => n + x.v, 0) / docs.length)}%</b><span>taken so far</span></div>
+        <div class="tile"><small>This week, booked</small><b>${thisW}%</b><span>${vsLast(thisW, lastW)} last week</span></div>
+        <div class="tile"><small>Next two weeks</small><b>${Math.round(docs.reduce((n, x) => n + x.v, 0) / docs.length)}%</b><span>booked so far</span></div>
         <div class="tile"><small>Calls, last 7 days</small><b>${c7}</b><span>${p7 ? `${vsLast(c7, p7, "")} the 7 days before` : "none the 7 days before"}</span></div>
         <div class="tile"><small>Booked within a day</small><b>${bk.length ? Math.round(fast * 100 / bk.length) : 0}%</b><span>${bk.length} of ${need.length} booked</span></div>
       </div>
       <ul class="insights">${insights.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
       <h3 class="sec2">Clinic occupancy by week</h3>${bars(weeks, "%")}<p class="note">The last bars are weeks ahead: they fill up as people call.</p>
-      <h3 class="sec2">Busiest days of the week</h3>${bars(wdays, "%")}<p class="note">The average over the last eight weeks.</p>
+      <h3 class="sec2">Busiest days of the week</h3>${bars(wdays, "%")}<p class="note">The average over the last eight weeks and the next two.</p>
       <h3 class="sec2">Dentists, next two weeks</h3>${bars(docs, "%")}
       <h3 class="sec2">Calls per day</h3>${bars(days14, "")}<p class="note"><i class="k urgent"></i> urgent or emergency · the last 14 days</p>`;
   }
@@ -2574,12 +2629,26 @@ function clientApp() {
         break;
       }
       case "demoreset":
-        if (demoArmed) { demoArmed = false; caseId = ""; patId = ""; send("demo-reset", {}); }
+        if (demoArmed) { demoArmed = false; caseId = ""; patId = ""; send("data-clear", {}); }
         else { demoArmed = true; renderCfg(); setTimeout(() => { if (demoArmed) { demoArmed = false; renderCfg(); } }, 3500); }
         break;
       case "toggle": S.settings[v] = !S.settings[v]; send("set", { k: v, v: S.settings[v] }); renderCfg(); renderAI(); break;
       case "aiopen": aiOpen = true; renderAI(); send("state", {}); break;   // fresh token counts
       case "cfgopen": cfgOpen = true; renderCfg(); break;
+      case "dentnew": dent = { id: "", name: "", short: "", role: "", spec: ["general"], days: [1, 2, 3, 4, 5], from: 8, to: 16 }; dentErr = ""; caseId = ""; renderCase();
+        cfgOpen = true; renderCfg(); setTimeout(() => { const f = $("#dn"); if (f) { f.scrollIntoView({ block: "center" }); } }, 60); break;
+      case "dentedit": { const d = (S.allDoctors || S.doctors).find(x => x.id === id); if (d) { dent = JSON.parse(JSON.stringify(d)); dentErr = ""; renderCfg(); } break; }
+      case "dentcancel": dent = null; dentErr = ""; renderCfg(); break;
+      case "dentspec": case "dentday": {
+        readDent(); const k = act === "dentday" ? +v : v, arr = act === "dentday" ? dent.days : dent.spec, i = arr.indexOf(k);
+        if (i >= 0) arr.splice(i, 1); else arr.push(k);
+        renderCfg(); break;
+      }
+      case "dentsave": readDent(); send("doctor-save", { doctor: dent }, (ok, msg) => { if (ok) { dent = null; dentErr = ""; } else dentErr = msg || "Couldn't save"; renderCfg(); }); break;
+      case "dentdel":
+        if (dentArmed === id) { dentArmed = ""; dent = null; send("doctor-remove", { id }); }
+        else { dentArmed = id; renderCfg(); setTimeout(() => { if (dentArmed === id) { dentArmed = ""; renderCfg(); } }, 3500); }
+        break;
       case "cfgclose": cfgOpen = false; cfgArmed = false; bpOpen = null; renderBp(); renderCfg(); break;
       case "cfgreset": { const d = cfgItem(t.dataset.k); S.cfg[d.k] = d.def; send("cfg", { k: d.k, v: null }); renderCfg(); break; }
       case "cfgstep": {
@@ -2901,9 +2970,13 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .rule-n{color:var(--amber)}
 /* calendar */
 .calwrap{max-width:680px;margin:0 auto;padding:4px 16px 0}
-.calnav{display:flex;align-items:center;gap:8px;margin:8px 0 6px}
-.calnav b{flex:1;text-align:center;font-size:calc(17px * var(--ts))}
-.cn-b{width:40px;height:40px;border-radius:12px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);font-size:22px}
+.calnav{display:flex;align-items:center;gap:10px;margin:10px 0 8px}
+.cn-t{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;text-align:center}
+.cn-t b{font-size:calc(17px * var(--ts));line-height:1.25}
+.cn-today{border:0;background:none;color:var(--signal);font:inherit;font-weight:650;font-size:calc(13.5px * var(--ts));padding:4px 10px;border-radius:999px;min-height:30px}
+.cn-b{flex:none;width:46px;height:46px;padding:0;margin:0;display:grid;place-items:center;border-radius:50%;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);line-height:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform .12s ease,background .12s ease}
+.cn-b svg{display:block}
+.cn-b:active{transform:scale(.92);background:var(--signal-wash);color:var(--signal)}
 .calsum{display:flex;align-items:center;gap:14px;background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:12px 16px;margin:8px 0 12px}
 .calsum>b{font-size:calc(34px * var(--ts));font-weight:800;color:var(--signal);font-variant-numeric:tabular-nums}
 .calsum span{display:flex;flex-direction:column;font-size:calc(15px * var(--ts))}
@@ -2915,7 +2988,6 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .cd-p{font-weight:700;font-variant-numeric:tabular-nums}
 .strip{display:flex;gap:2px;height:22px}
 .strip i,.k{flex:1;border-radius:3px;background:var(--rule)}
-.strip i.taken,.k.taken{background:var(--ink-2);opacity:.45}
 .strip i.ours,.k.ours{background:var(--signal)}
 .strip i.free,.k.free{background:var(--rule)}
 .k{display:inline-block;width:12px;height:12px;vertical-align:-2px;margin:0 2px 0 8px;flex:none}
@@ -2944,6 +3016,11 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .mcell.out{border:0;background:none}
 .mcell.closed{background:none;border-style:dashed;color:var(--muted)}
 .cal-k{margin-top:14px}
+.dform{display:flex;flex-direction:column;gap:6px;background:var(--sheet);border:1px solid var(--signal);border-radius:16px;padding:12px 14px;margin:6px 0 10px}
+.dform .chips{display:flex;flex-wrap:wrap;gap:6px}
+.dhours{display:grid;grid-template-columns:auto 1fr auto 1fr;align-items:center;gap:8px}
+.dsel{min-width:0}
+.pad-s{padding:4px 2px}
 .tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
 .tile{background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column}
 .tile small{color:var(--muted);font-size:calc(12.5px * var(--ts))}
@@ -3188,7 +3265,7 @@ const buildHTML = () => `<!doctype html><html lang="en" data-theme="${initTheme}
   <nav id="tabs" class="tabs" aria-label="Screens"></nav>
 </header>
 <main id="list"><div class="booting" role="status"><span class="busy-dot"></span>Opening the front desk…</div></main>
-<p class="ver">Frontly v${VERSION} · a demo: the clinic, dentists and patients are made up</p>
+<p class="ver">Frontly v${VERSION} · a demo app, not for real patient records</p>
 <div id="callsheet" class="sheet" role="dialog" aria-label="Call"></div>
 <div id="patsheet" class="sheet" aria-label="Patient"></div>
 <div id="casesheet" class="sheet" aria-label="Call note"></div>

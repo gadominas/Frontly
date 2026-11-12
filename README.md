@@ -22,7 +22,7 @@ Call the clinic. Answer Reva. Book the visit.
 <!-- header:end -->
 
 > [!IMPORTANT]
-> **A demo.** Northlight Dental, its dentists, patients, phone numbers and schedule are all made up. Frontly shows what a virtual receptionist can do; it books nothing real and gives no medical advice. See [Disclaimer](#disclaimer).
+> **A demo app.** Frontly shows what a virtual receptionist can do. It starts empty: you add the dentists, and the patients are whoever calls. It is not meant for real patient records and gives no medical advice. See [Disclaimer](#disclaimer).
 
 ## See it in action
 
@@ -118,7 +118,7 @@ What else you need:
 | Close a call without booking | **Close without booking**, then **Confirm** |
 | Add a note | At the bottom of a call or a patient's record |
 
-Times with a dot match what the caller asked for ("mornings", "after 3 pm", "Friday", "next week"). A patient's visits never overlap, are kept a day apart, and two surgeries are kept 14 days apart; times that break these rules are struck through, with the reason underneath (**Settings › Booking** sets both gaps). The other patients' bookings that fill the diary are made up; **Settings › Booking › Demo: slots already taken** sets how full it looks.
+Times with a dot match what the caller asked for ("mornings", "after 3 pm", "Friday", "next week"). A patient's visits never overlap, are kept a day apart, and two surgeries are kept 14 days apart; times that break these rules are struck through, with the reason underneath (**Settings › Booking** sets both gaps).
 
 <details>
 <summary><b>What Reva asks, and what she does with it</b></summary>
@@ -144,9 +144,13 @@ Without AI the note is put together from these answers by fixed rules; with AI, 
 
 Give Reva a real phone number: a Twilio number, answered by an ElevenLabs agent with Reva's instructions, and a small free Cloudflare Worker that tells her who's calling and hands finished calls to Frontly. They land at the front desk like any other call, marked 📞, filed under the caller's record. Setup, step by step: [bridge/README.md](bridge/README.md).
 
-### Start the demo again
+### Add your dentists
 
-**Settings › Demo › Start the demo again** puts back the three demo patients and the one waiting call, and removes every call and booking made since.
+**Settings › Dentists › Add**: the name, a short name for cards and the calendar, the role, what they do (general, root canal, surgery, braces, cleaning, children), the days they work and their hours. Bookings, the AI's suggestions and the calendar use them. **Edit** changes one; **Remove** takes one off (not while they have visits booked; past visits keep their name).
+
+### Start empty again
+
+**Settings › Data › Remove all calls and patients** clears the front desk. Dentists and settings stay.
 
 ## Widget
 
@@ -175,10 +179,11 @@ Tap the sliders icon at the top. Changes apply at once and are saved in `setting
 | Appearance | Colours (Auto or six palettes), layout (Comfortable, Compact, Tiny), text size, headline font |
 | Calls | Language of the call, Reva's voice (iPhone or AI voice, which voice, how she sounds), how Reva hears you, listening on its own, AI settings |
 | Front desk | Who is signed in; sign out |
+| Dentists | Add, edit and remove dentists: name, role, what they do, days and hours |
 | Phone line | The bridge's address and token, its status, Reva's instructions for ElevenLabs |
-| Demo | Start the demo again |
+| Data | Remove all calls and patients |
 | Updates | Offer new versions, check now, the start-up log |
-| Clinic, Calls, Booking, Widget | The clinic's and receptionist's names, questions per call, the pause before listening, days to offer, appointment length, how full the demo diary is, widget refresh; each with Reset |
+| Clinic, Calls, Booking, Widget | The clinic's and receptionist's names, questions per call, the pause before listening, days to offer, appointment length, days between a patient's visits and between two surgeries, widget refresh; each with Reset |
 | Built with | The shared blueprints this app follows; tap one to see what it does |
 
 ## Updates and what's new
@@ -206,7 +211,8 @@ Frontly is one Scriptable script. Its interface is a web page in a `WebView`; th
 | Reva stops listening too soon, or waits too long | **Settings › Calls › Stop listening after a pause of** (OpenAI transcription) |
 | OpenAI transcription switches to iPhone dictation | Scriptable's page couldn't use the microphone on this iPhone; dictation takes over |
 | "AI didn't answer, so Reva carries on with her script" | The provider didn't reply in time or refused the key; the call goes on without AI. Test the key in AI settings |
-| The front desk is empty | Make a call, or **Settings › Demo › Start the demo again** |
+| The front desk is empty | Make a call on the Call tab, or wait for a real one |
+| Booking says "No dentists yet" | **Settings › Dentists › Add** |
 | Frontly opens to a black or stuck screen | Close it and open it again; **Settings › Updates › Start-up log** shows what happened |
 
 ## Built with
