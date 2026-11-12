@@ -108,14 +108,17 @@ What else you need:
 | To… | Do this |
 | --- | --- |
 | Sign in | **Front desk**, pick a receptionist, PIN **1234** |
-| See what needs booking | **To book**, most urgent first; **Booked**, **Closed** and **All** for the rest |
-| Book a caller | Tap the call, check the dentist (the suggested one is first), pick a day and a free time, tap **Book** |
+| See what needs booking | **To book**, most urgent first; **Booked**, **Other** (closed, or no booking needed) and **All** for the rest. A patient with several calls gets one card with all of them |
+| Book a caller | Tap the call: the suggested time is already selected. Change the dentist, day or time if you like, tap **Book** |
+| Move a visit | A call asking to change a booking shows **Visit to move**; pick the new time and tap **Move to …** |
+| Get the AI's view | **✦ Ask AI to plan this visit** (it asks by itself when the patient has other visits, needs surgery, or wants a change) |
+| See how full the clinic is | **Calendar**: each dentist's day, the week and the month as percent taken, and **Trends** |
 | Send the caller a confirmation | **Copy confirmation text** on a booked call |
 | Undo a booking | **Cancel appointment**, then **Confirm**; the call goes back to **To book** |
 | Close a call without booking | **Close without booking**, then **Confirm** |
 | Add a note | At the bottom of a call or a patient's record |
 
-Times with a dot match what the caller asked for ("mornings", "after 3 pm"). The other patients' bookings that fill the diary are made up; **Settings › Booking › Demo: slots already taken** sets how full it looks.
+Times with a dot match what the caller asked for ("mornings", "after 3 pm", "Friday", "next week"). A patient's visits never overlap, are kept a day apart, and two surgeries are kept 14 days apart; times that break these rules are struck through, with the reason underneath (**Settings › Booking** sets both gaps). The other patients' bookings that fill the diary are made up; **Settings › Booking › Demo: slots already taken** sets how full it looks.
 
 <details>
 <summary><b>What Reva asks, and what she does with it</b></summary>

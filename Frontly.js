@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -110,6 +110,8 @@ const CONFIG = [
   ["Booking", [
     { k: "daysAhead", label: "Days to offer", help: "How far ahead the front desk can book", unit: "days", def: 10, min: 3, max: 30, step: 1 },
     { k: "slotMinutes", label: "Appointment length", unit: "min", def: 30, min: 15, max: 60, step: 15 },
+    { k: "visitGapDays", label: "Days between a patient's visits", help: "0 allows two visits on one day (never at the same time); 1 keeps them on different days", unit: "days", def: 1, min: 0, max: 14, step: 1 },
+    { k: "surgeryGapDays", label: "Days between two surgeries", help: "Healing time before the same patient can have another surgery", unit: "days", def: 14, min: 0, max: 60, step: 1 },
     { k: "busyShare", label: "Demo: slots already taken", help: "The made-up share of each dentist's slots that other patients hold", unit: "%", def: 45, min: 0, max: 90, step: 5 },
   ]],
   ["Widget", [
@@ -160,6 +162,25 @@ const DOCTORS = [
   { id: "d-vait", name: "Dr. Laura Vaitkutė", short: "Dr. Vaitkutė", role: "Orthodontist", spec: ["ortho", "kids"], days: [1, 2, 4], from: 12, to: 19 },
   { id: "d-stan", name: "Eglė Stankevičiūtė", short: "Eglė (hygienist)", role: "Dental hygienist", spec: ["hygiene"], days: [1, 2, 3, 4, 5], from: 8, to: 17 },
 ];
+// Booking rules for one patient, shared by the script (when booking) and the page (greying out times): visits may
+// not overlap, must be o.gapDays apart (0: the same day is fine, 1: different days), and two surgeries need
+// o.surgeryDays to heal. Returns why a time can't be booked, or "". Self-contained: it is also put into the page.
+function visitConflict(appts, at, spec, o) {
+  const day = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const pad = n => String(n).padStart(2, "0"), hm = t => pad(new Date(t).getHours()) + ":" + pad(new Date(t).getMinutes());
+  const date = t => new Date(t).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  for (const a of appts || []) {
+    if (a.id && a.id === o.ignore) continue;
+    const live = a.status === "booked", dd = Math.round(Math.abs(day(a.at) - day(at)) / 864e5), with_ = o.docName(a.doctor);
+    if (live && Math.abs(a.at - at) < o.slotMin * 60e3) return `Already booked at ${hm(a.at)} with ${with_}`;
+    if (live && o.gapDays > 0 && dd < o.gapDays) return dd === 0 ? `Already has a visit that day: ${hm(a.at)} with ${with_}` : `Less than ${o.gapDays} days from the visit on ${date(a.at)}`;
+    if ((live || a.status === "done") && spec === "surgery" && o.specOf(a) === "surgery" && dd < o.surgeryDays)
+      return `Within ${o.surgeryDays} days of the surgery on ${date(a.at)}: time to heal`;
+  }
+  return "";
+}
+const ruleOpts = (ignore) => ({ slotMin: cfg("slotMinutes"), gapDays: cfg("visitGapDays"), surgeryDays: cfg("surgeryGapDays"), ignore,
+  specOf: a => a.spec || ((DOCTORS.find(d => d.id === a.doctor) || {}).spec || [])[0], docName: id => (DOCTORS.find(d => d.id === id) || {}).short || "the dentist" });
 const DESK_STAFF = ["Agnė Petrauskaitė", "Mantas Jonaitis"];
 const DEMO_PIN = "1234";
 const MOODS = { calm: "🙂", cheerful: "😊", worried: "😟", anxious: "😰", "in pain": "😣", frustrated: "😤", upset: "😢", unsure: "😐" };
@@ -937,11 +958,22 @@ function bookCall(m) {
   const taken = patients.some(p => (p.appts || []).some(a => a.doctor === doc.id && a.at === at && a.status === "booked"));
   if (taken) return "That time was just taken. Pick another one";
   let pt = c.patientId && patients.find(p => p.id === c.patientId);
+  const move = pt && m.move && (pt.appts || []).find(a => a.id === m.move && a.status === "booked");
+  const spec = (move && (move.spec || ruleOpts().specOf(move))) || (c.summary && c.summary.specialty) || doc.spec[0];
+  const why = pt ? visitConflict(pt.appts, at, spec, ruleOpts(move && move.id)) : "";
+  if (why) return why;
   if (!pt) { pt = { id: "p-" + Date.now().toString(36), name: c.fields.name || "Caller " + c.phone, age: c.fields.age || null, phone: c.phone, since: Date.now(), notes: [], appts: [] }; patients.push(pt); c.patientId = pt.id; }
-  const reason = (c.summary && c.summary.reason) || c.fields.complaint || "Visit";
+  const reason = (move && move.reason) || (c.summary && c.summary.reason) || c.fields.complaint || "Visit";
   pt.appts = pt.appts || [];
-  pt.appts.push({ id: "a-" + Date.now().toString(36), at, doctor: doc.id, reason, callId: c.id, status: "booked", by: settings.deskUser, made: Date.now() });
+  const a = { id: "a-" + Date.now().toString(36), at, doctor: doc.id, spec, reason, callId: c.id, status: "booked", by: settings.deskUser, made: Date.now() };
+  pt.appts.push(a);
+  if (move) {   // a change of booking moves the visit; the call that booked it shows where it went
+    move.status = "moved"; move.movedTo = a.id; a.movedFrom = move.id;
+    const oc = move.callId && calls.find(x => x.id === move.callId);
+    if (oc && oc !== c && oc.booking) oc.booking.movedTo = at;
+  }
   c.status = "booked"; c.booking = { doctor: doc.id, at, by: settings.deskUser, made: Date.now() };
+  if (move) c.booking.movedFrom = move.at;
   return "";
 }
 function cancelAppt(m) {
@@ -960,6 +992,32 @@ function addNote(m) {
   const c = m.call && calls.find(x => x.id === m.call);
   if (c) (c.deskNotes = c.deskNotes || []).unshift(n);
   return !!(pt || c);
+}
+
+// The AI's booking plan for one call: the best of the times the page offers (free, within the rules), weighed against
+// the urgency, what the caller asked for and the patient's other visits. The page only offers times that are allowed.
+async function aiPlan(m) {
+  const c = calls.find(x => x.id === m.id), pt = c && patients.find(p => p.id === c.patientId);
+  if (!c) return;
+  const cands = (m.candidates || []).filter(x => docById(x.doctor) && isFinite(+x.at)).slice(0, 36);
+  if (!cands.length) throw new Error("No free times to choose from");
+  const when = t => new Date(t).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const s = c.summary || {}, f = c.fields || {}, move = pt && m.move && (pt.appts || []).find(a => a.id === m.move);
+  const sys = `You plan dental appointments for a clinic's front desk. Choose the best time from the candidates only. Weigh how urgent it is, what the caller asked for, the right dentist, and the patient's other visits: keep visits apart, and leave time to heal after surgery. Be brief and practical. Reply with JSON only.`;
+  const user = JSON.stringify({
+    today: when(Date.now()),
+    request: { summary: s.text, reason: s.reason, triage: s.triage, priority: s.priority, specialty: SPECIALTIES[s.specialty] || s.specialty, preferred_time: f.preferred, notes: f.notes, moving_the_visit_on: move ? when(move.at) : null },
+    patient_visits: pt ? (pt.appts || []).filter(a => a.at > Date.now() - 120 * DAY).map(a => ({ when: when(a.at), dentist: (docById(a.doctor) || {}).name, specialty: SPECIALTIES[ruleOpts().specOf(a)], reason: a.reason, status: a.status })) : [],
+    clinic_rules: { days_between_visits: cfg("visitGapDays"), days_between_surgeries: cfg("surgeryGapDays") },
+    candidates: cands.map((x, i) => ({ i, when: when(+x.at), dentist: docById(x.doctor).name, role: docById(x.doctor).role, matches_caller_preference: !!x.pref })),
+    reply_as: { pick: "the i of the best candidate", why: "one or two sentences for the receptionist", warnings: ["anything to check with the patient before booking; empty if none"], alternatives: ["up to two other i, best first"] },
+  });
+  const j = parseJSON(await aiCall(sys, user, 600, "plan", settings.aiProvider));
+  const pick = cands[Number(j.pick)];
+  if (!pick) throw new Error("The AI didn't pick one of the offered times");
+  c.plan = { doctor: pick.doctor, at: +pick.at, why: String(j.why || "").slice(0, 300), warnings: (Array.isArray(j.warnings) ? j.warnings : []).map(String).filter(Boolean).slice(0, 3),
+    alts: (Array.isArray(j.alternatives) ? j.alternatives : []).map(i => cands[Number(i)]).filter(x => x && x !== pick).slice(0, 2).map(x => ({ doctor: x.doctor, at: +x.at })),
+    provider: settings.aiProvider, made: Date.now(), move: m.move || "" };
 }
 
 // ---------- state sent to the UI ----------
@@ -1059,6 +1117,10 @@ async function handle(m) {
       if (String(m.pin || "").trim() !== DEMO_PIN || !DESK_STAFF.includes(m.who)) return call("__done", m.req, false, "That PIN isn't right. The demo PIN is " + DEMO_PIN);
       settings.deskUser = m.who; saveAll(); push(); return call("__done", m.req, true, "");
     case "signout": settings.deskUser = ""; break;
+    case "plan-ai": {
+      try { await aiPlan(m); } catch (e) { toast("AI plan: " + String(e.message || e).slice(0, 120)); }
+      saveAll(); push(); return call("__done", m.req, true, "");
+    }
     case "book": {
       const err = bookCall(m);
       if (err) return call("__done", m.req, false, err);
@@ -1309,7 +1371,7 @@ function clientApp() {
   }
   let aiOpen = false, aiArmed = null; const aiLoading = new Set();
   const PN = { anthropic: "Claude", openai: "OpenAI", elevenlabs: "ElevenLabs" };
-  const FEAT = { call: "Conversation", summary: "Call notes", speech: "Reva's voice", listening: "Transcription", test: "Connection tests", other: "Other" };
+  const FEAT = { call: "Conversation", summary: "Call notes", plan: "Booking plans", speech: "Reva's voice", listening: "Transcription", test: "Connection tests", other: "Other" };
   const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
   function arm(key) { aiArmed = key; renderAI(); setTimeout(() => { if (aiArmed === key) { aiArmed = null; renderAI(); } }, 3500); }
   function usageBlock(p, P) {
@@ -1829,9 +1891,9 @@ function clientApp() {
   const triagePill = t => t ? `<span class="pill tri-${esc(t)}">${TRIAGE_L[t] || esc(t)}</span>` : "";
   const initials = n => String(n || "?").trim().split(/\s+/).slice(0, 2).map(w => w.charAt(0)).join("").toUpperCase();
   const callName = c => (c.fields && c.fields.name) || ((byPatient(c.patientId) || {}).name) || c.phone;
-  const tabs = () => [["call", "Call"], ["desk", "Front desk"], ["patients", "Patients"]];
+  const tabs = () => [["call", "Call"], ["desk", "Front desk"], ["patients", "Patients"], ["cal", "Calendar"]];
   function setTab(v) {
-    if (!["call", "desk", "patients"].includes(v)) return;
+    if (!["call", "desk", "patients", "cal"].includes(v)) return;
     tab = v; send("set", { k: "tab", v }); render(); scrollTo(0, 0);
   }
   function renderChrome() {
@@ -1843,7 +1905,7 @@ function clientApp() {
   function render() {
     applyLook(); renderChrome();
     const el = $("#list");
-    el.innerHTML = tab === "desk" ? deskHTML() : tab === "patients" ? patientsHTML() : callTabHTML();
+    el.innerHTML = tab === "desk" ? deskHTML() : tab === "patients" ? patientsHTML() : tab === "cal" ? calHTML() : callTabHTML();
     if (tab === "patients") { const qi = $("#pq"); if (qi) qi.value = pq; }
   }
 
@@ -1902,7 +1964,29 @@ function clientApp() {
     const today = S.patients.reduce((n, p) => n + (p.appts || []).filter(a => a.status === "booked" && a.made && sod(a.made) === sod(Date.now())).length, 0);
     return `<div class="deskbar"><span>Signed in as <b>${esc(st.deskUser)}</b>${today ? ` · booked today: ${today}` : ""}</span><span class="db-acts">${S.line && S.line.on ? `<button class="link small" data-act="line-sync">${S.line.busy ? "Checking…" : "📞 Check line"}</button>` : ""}<button class="link small" data-act="signout">Sign out</button></span></div>
       <div class="segbar"><div class="seg wide">${[["waiting", "To book"], ["booked", "Booked"], ["closed", "Other"], ["all", "All"]].map(([v, l]) => `<button class="${deskFilter === v ? "on" : ""}" data-act="dfilter" data-v="${v}">${l} <i>${sets[v].length}</i></button>`).join("")}</div></div>
-      ${list.length ? `<div class="queue">${list.map(queueCard).join("")}</div>` : `<div class="empty"><h2>${deskFilter === "waiting" ? "Nobody is waiting" : "Nothing here yet"}</h2><p>${deskFilter === "waiting" ? `When someone calls, ${esc(S.assistant)}'s note lands here. Try it yourself on the Call tab.` : "Calls show up here as you work through them."}</p>${deskFilter === "waiting" ? `<button class="primary" data-act="tab" data-v="call">Make a call</button>` : ""}</div>`}`;
+      ${list.length ? `<div class="queue">${groupByPatient(list).map(g => g.length === 1 ? queueCard(g[0]) : groupCard(g)).join("")}</div>` : `<div class="empty"><h2>${deskFilter === "waiting" ? "Nobody is waiting" : "Nothing here yet"}</h2><p>${deskFilter === "waiting" ? `When someone calls, ${esc(S.assistant)}'s note lands here. Try it yourself on the Call tab.` : "Calls show up here as you work through them."}</p>${deskFilter === "waiting" ? `<button class="primary" data-act="tab" data-v="call">Make a call</button>` : ""}</div>`}`;
+  }
+  // A patient with several calls in the same list gets one card, the calls inside it, most urgent first
+  const TRI_ORDER = ["emergency", "urgent", "soon", "routine"];
+  function groupByPatient(list) {
+    const out = [], at = {};
+    list.forEach(c => { const k = c.patientId || "c:" + c.id; if (at[k]) at[k].push(c); else out.push(at[k] = [c]); });
+    return out;
+  }
+  function groupCard(g) {
+    const c0 = g[0], pt = byPatient(c0.patientId) || {}, up = upcomingOf(pt), f = c0.fields || {};
+    const top = g.map(c => (c.summary || {}).triage || "routine").sort((a, b) => TRI_ORDER.indexOf(a) - TRI_ORDER.indexOf(b))[0];
+    return `<div class="qgroup" role="group" aria-label="${esc(callName(c0))}: ${g.length} calls">
+      <span class="stripe tri-${esc(top)}"></span>
+      <div class="qg-head"><b class="q-name">${esc(callName(c0))}${(pt.age || f.age) ? `<small>, ${esc(pt.age || f.age)}</small>` : ""}</b>
+        <span class="chips"><span class="pill warn">${g.length} calls</span>${up.length ? `<span class="pill">${up.length} visit${up.length === 1 ? "" : "s"} booked</span>` : ""}${pt.id ? `<button class="link small" data-act="openpat" data-id="${esc(pt.id)}">Patient ›</button>` : ""}</span></div>
+      ${up.length ? `<div class="qg-visits">${up.map(a => `<span class="q-bk">📅 ${esc(dayLabel(a.at))} ${hhmm(a.at)} · ${esc((docOf(a.doctor) || {}).short || "")} · ${esc(a.reason || "")}</span>`).join("")}</div>` : ""}
+      ${g.map(c => { const s = c.summary || {}; return `<button class="qrow" data-act="opencase" data-id="${esc(c.id)}">
+        <span class="q-top">${c.status === "noted" ? statusPill(c) : triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞</span>` : ""}${intentPill(c)}<span class="q-when">${esc(rel(c.at))}</span></span>
+        <span class="q-why">${esc(s.reason || (c.fields || {}).complaint || "No reason given")}</span>
+        ${c.booking ? `<span class="q-bk">✓ ${c.booking.movedTo ? "moved to " + esc(dayLabel(c.booking.movedTo)) + " " + hhmm(c.booking.movedTo) : esc(dayLabel(c.booking.at)) + " " + hhmm(c.booking.at) + " · " + esc((docOf(c.booking.doctor) || {}).short || "")}</span>` : ""}
+        <span class="chev" aria-hidden="true">›</span></button>`; }).join("")}
+    </div>`;
   }
   function queueCard(c) {
     const s = c.summary || {}, f = c.fields || {}, bk = c.booking;
@@ -1911,13 +1995,14 @@ function clientApp() {
       <span class="q-top">${c.status === "noted" ? statusPill(c) : triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Phone</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}${intentPill(c)}${(c.again || []).length ? `<span class="pill warn">Called ${c.again.length + 1}×</span>` : ""}<span class="q-when">${esc(rel(c.at))}</span></span>
       <b class="q-name">${esc(callName(c))}${f.age ? `<small>, ${esc(f.age)}</small>` : ""}</b>
       <span class="q-why">${esc(s.reason || f.complaint || "No reason given")}</span>
-      <span class="chips">${f.pain != null ? `<span class="pill">Pain ${esc(f.pain)}/10</span>` : ""}${f.urgency != null ? `<span class="pill">Urgency ${esc(f.urgency)}/5</span>` : ""}${c.mood ? `<span class="pill">${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}</span>` : ""}${f.preferred ? `<span class="pill soft">${esc(String(f.preferred).slice(0, 34))}</span>` : ""}</span>
+      <span class="chips">${f.pain != null ? `<span class="pill">Pain ${esc(f.pain)}/10</span>` : ""}${f.urgency != null ? `<span class="pill">Urgency ${esc(f.urgency)}/5</span>` : ""}${c.mood ? `<span class="pill">${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}</span>` : ""}${f.preferred ? `<span class="pill soft">${esc(clip(f.preferred, 34))}</span>` : ""}</span>
       ${bk ? `<span class="q-bk">✓ ${esc(dayLabel(bk.at))} ${hhmm(bk.at)} · ${esc((docOf(bk.doctor) || {}).short || "")}</span>` : ""}
     </button>`;
   }
 
   // The case: one call, as the receptionist sees it, with booking
-  let caseId = "", caseDoc = "", caseDay = 0, caseSlot = 0, caseArmed = "", caseBusy = false, showTx = false;
+  let caseId = "", caseDoc = "", caseDay = 0, caseSlot = 0, caseArmed = "", caseBusy = false, showTx = false, caseMove = "", caseSug = null;
+  const planBusy = {};
   const hash = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return Math.abs(h); };
   const dkey = ts => { const d = new Date(ts); return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); };
   function bookedAt(docId) {
@@ -1930,14 +2015,67 @@ function clientApp() {
     for (let i = 0, d = sod(Date.now()); out.length < n && i < 60; i++, d = sod(d + DAY + 3600e3)) if (doc.days.includes(new Date(d).getDay())) out.push(d);
     return out;
   }
-  function slotsFor(doc, day) {
-    const step = (S.cfg.slotMinutes || 30) * 60e3, taken = bookedAt(doc.id), out = [], busy = S.cfg.busyShare == null ? 45 : S.cfg.busyShare;
-    for (let t = day + doc.from * 3600e3; t + step <= day + doc.to * 3600e3; t += step) {
-      if (t < Date.now() + 3600e3) continue;   // not within the next hour
-      const mock = hash(doc.id + dkey(t) + t) % 100 < busy;   // other (made-up) patients
-      out.push({ at: t, free: !mock && !taken.has(t) });
-    }
-    return out;
+  // The made-up patients who fill the rest of the diary: busier on Mondays and mid-morning, quieter further ahead
+  const DOW_BIAS = [0, 12, 4, 0, 6, -8, 0];
+  function mockTaken(doc, t) {
+    const busy = S.cfg.busyShare == null ? 45 : S.cfg.busyShare;
+    if (!busy) return false;
+    const d = new Date(t), h = d.getHours(), ahead = Math.max(0, Math.round((sod(t) - sod(Date.now())) / DAY));
+    let share = busy + DOW_BIAS[d.getDay()] + (Math.floor(sod(t) / (7 * DAY)) * 37 % 13 - 6) + (h >= 9 && h < 12 ? 8 : h >= 16 ? -6 : 0);
+    if (ahead > 0) share *= 1 - Math.min(0.55, ahead * 0.035);
+    return hash(doc.id + dkey(t) + t) % 100 < Math.max(0, Math.min(95, share));
+  }
+  const slotTimes = (doc, day) => { const step = (S.cfg.slotMinutes || 30) * 60e3, out = []; for (let t = day + doc.from * 3600e3; t + step <= day + doc.to * 3600e3; t += step) out.push(t); return out; };
+  // rule(t): why this patient can't have that time (the booking rules), or ""
+  function slotsFor(doc, day, rule) {
+    const taken = bookedAt(doc.id);
+    return slotTimes(doc, day).filter(t => t >= Date.now() + 3600e3)   // not within the next hour
+      .map(t => ({ at: t, free: !mockTaken(doc, t) && !taken.has(t), why: rule ? rule(t) : "" }));
+  }
+  const usable = x => x.free && !x.why;
+  // The booking rules for this call's patient (visitConflict is shared with the script)
+  const upcomingOf = pt => (pt && pt.appts || []).filter(a => a.status === "booked" && a.at > Date.now()).sort((a, b) => a.at - b.at);
+  const specOfAppt = a => a.spec || ((docOf(a.doctor) || {}).spec || [])[0];
+  function ruleFor(c, moveId, docId) {
+    const pt = byPatient(c.patientId);
+    if (!pt) return null;
+    const mv = moveId && (pt.appts || []).find(a => a.id === moveId), doc = docOf(docId) || {};
+    const spec = (mv && specOfAppt(mv)) || (c.summary || {}).specialty || (doc.spec || [])[0];
+    const o = { slotMin: S.cfg.slotMinutes || 30, gapDays: S.cfg.visitGapDays == null ? 1 : S.cfg.visitGapDays, surgeryDays: S.cfg.surgeryGapDays == null ? 14 : S.cfg.surgeryGapDays,
+      ignore: moveId || "", specOf: specOfAppt, docName: id => (docOf(id) || {}).short || "the dentist" };
+    return t => visitConflict(pt.appts, t, spec, o);
+  }
+  // The dentists for this call, the one the note suggests (or the moved visit's) first
+  function caseDocs(c, moveId) {
+    const s = c.summary || {}, mv = moveId && ((byPatient(c.patientId) || {}).appts || []).find(a => a.id === moveId);
+    const first = (mv && mv.doctor) || s.doctor, spec = (mv && specOfAppt(mv)) || s.specialty;
+    return S.doctors.filter(d => d.id === first || d.spec.includes(spec)).sort((a, b) => (b.id === first) - (a.id === first));
+  }
+  // A suggested time: what the caller asked for, the right dentist, soon (sooner the more urgent), within the rules
+  function suggest(c, moveId) {
+    const s = c.summary || {}, pf = prefers(c), urgent = s.triage === "emergency" || s.triage === "urgent";
+    let best = null;
+    caseDocs(c, moveId).forEach((d, di) => {
+      const rule = ruleFor(c, moveId, d.id);
+      workDays(d).forEach((day, i) => slotsFor(d, day, rule).forEach(x => {
+        if (!usable(x)) return;
+        const p = prefOk(pf, x.at), score = (p ? (urgent ? 30 : 100) : 0) - i * (urgent ? 25 : 6) - di * 15 - (x.at - day) / 36e5 * 0.1;
+        if (!best || score > best.score) best = { doctor: d.id, at: x.at, score, pref: p };
+      }));
+    });
+    if (!best) return null;
+    const asked = String((c.fields || {}).preferred || "").slice(0, 40);
+    best.why = best.pref ? `matches “${asked}”` : urgent ? "the earliest free time: it's urgent" : pf.any ? `nothing free matches “${asked}”; the earliest free time` : "the earliest free time";
+    return best;
+  }
+  // What the AI chooses from: the allowed free times of the fitting dentists, the ones the caller asked for marked
+  function planCandidates(c, moveId) {
+    const pf = prefers(c), out = [];
+    caseDocs(c, moveId).slice(0, 3).forEach(d => {
+      const rule = ruleFor(c, moveId, d.id); let n = 0;
+      workDays(d).forEach(day => slotsFor(d, day, rule).forEach(x => { if (usable(x) && n < 14 && (n < 6 || x.at % (2 * 36e5) === 0 || prefOk(pf, x.at))) { out.push({ doctor: d.id, at: x.at, pref: prefOk(pf, x.at) }); n++; } }));
+    });
+    return out.slice(0, 36);
   }
   // What the caller asked for, as hours: "mornings" → before 12, "after 3 pm" or "after two" → from 15 or 14
   const HOURW = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, vienos: 1, dviejų: 2, trijų: 3, keturių: 4, penkių: 5 };
@@ -1953,21 +2091,52 @@ function clientApp() {
       if (h < 8) h += 12;
       from = h; if (to <= from) to = 24; break;
     }
-    return { any: from > 0 || to < 24, from, to };
+    // days: "Monday", "pirmadienį", "tomorrow", "next week"
+    const DAYW = [["sun|sekmad", 0], ["mon|pirmad", 1], ["tue|antrad", 2], ["wed|trečiad|treciad", 3], ["thu|ketvirtad", 4], ["fri|penktad", 5], ["sat|šeštad|sestad", 6]];
+    const days = DAYW.filter(([re]) => new RegExp("\\b(" + re + ")", "i").test(p)).map(([, d]) => d);
+    let onDay = 0, notBefore = 0;
+    if (/(tomorrow|rytoj)/.test(p)) onDay = sod(Date.now() + DAY + 3600e3);
+    if (/(next week|kitą savaitę|kita savaite)/.test(p)) { const d = new Date(sod(Date.now())); notBefore = sod(d.getTime() + ((8 - d.getDay()) % 7 || 7) * DAY + 3600e3); }
+    const hours = from > 0 || to < 24;
+    return { any: hours || days.length > 0 || !!onDay || !!notBefore, hours, from, to, days, onDay, notBefore };
   }
-  const prefOk = (pf, t) => { const h = new Date(t).getHours(); return pf.any && h >= pf.from && h < pf.to; };
+  const prefOk = (pf, t) => {
+    if (!pf.any) return false;
+    const d = new Date(t), h = d.getHours();
+    return (!pf.hours || (h >= pf.from && h < pf.to)) && (!pf.days.length || pf.days.includes(d.getDay())) && (!pf.onDay || sod(t) === pf.onDay) && (!pf.notBefore || t >= pf.notBefore);
+  };
   function openCase(id) {
     const c = byCall(id); if (!c) return;
     if (!S.settings.deskUser) { tab = "desk"; render(); toast("Sign in at the front desk to open calls"); return; }
-    caseId = id; caseArmed = ""; showTx = false; caseSlot = 0;
+    caseId = id; caseArmed = ""; showTx = false; caseSlot = 0; caseDay = 0;
+    const up = upcomingOf(byPatient(c.patientId));
+    caseMove = c.status === "waiting" && c.intent === "change_visit" && up.length ? ((c.plan && c.plan.move) || up[0].id) : "";
     caseDoc = (c.booking && c.booking.doctor) || (c.summary && c.summary.doctor) || S.doctors[0].id;
-    caseDay = 0; renderCase(); $("#casesheet").scrollTop = 0;
+    caseSug = c.status === "waiting" ? suggest(c, caseMove) : null;
+    if (caseSug) useTime(caseSug.doctor, caseSug.at);
+    renderCase(); $("#casesheet").scrollTop = 0;
+    if (c.status === "waiting" && !c.plan && S.settings.ai && S.settings.hasKey && needsJudgement(c)) askPlan(c);
+  }
+  function useTime(doctor, at) { caseDoc = doctor; caseDay = sod(at); caseSlot = at; }
+  // When the AI's judgement is worth it: other visits nearby, surgery, or moving a visit
+  function needsJudgement(c) {
+    const pt = byPatient(c.patientId), s = c.summary || {};
+    return c.intent === "change_visit" || s.specialty === "surgery" ||
+      (pt && (pt.appts || []).some(a => (a.status === "booked" && a.at > Date.now()) || (a.status === "done" && specOfAppt(a) === "surgery" && a.at > Date.now() - 60 * DAY)));
+  }
+  function askPlan(c) {
+    if (planBusy[c.id]) return;
+    const candidates = planCandidates(c, caseMove);
+    if (!candidates.length) return;
+    planBusy[c.id] = true; renderCase();
+    send("plan-ai", { id: c.id, move: caseMove, candidates }, () => { delete planBusy[c.id]; renderCase(); });
   }
   function bookingHTML(c) {
     if (c.status === "booked" && c.booking) {
       const d = docOf(c.booking.doctor) || {}, pt = byPatient(c.patientId) || {};
       const appt = (pt.appts || []).find(a => a.callId === c.id && a.status === "booked");
-      return `<div class="booked"><b>✓ Booked: ${esc(dayLabel(c.booking.at))}, ${hhmm(c.booking.at)}</b><span>${esc(d.name || "")} · ${esc(d.role || "")}</span><small class="muted">by ${esc(c.booking.by || "")}</small>
+      if (c.booking.movedTo) return `<div class="booked closed"><b>Moved to ${esc(dayLabel(c.booking.movedTo))}, ${hhmm(c.booking.movedTo)}</b><span class="muted">Was ${esc(dayLabel(c.booking.at))}, ${hhmm(c.booking.at)} with ${esc(d.short || "")}. A later call moved it.</span></div>`;
+      return `<div class="booked"><b>✓ ${c.booking.movedFrom ? "Moved to" : "Booked:"} ${esc(dayLabel(c.booking.at))}, ${hhmm(c.booking.at)}</b><span>${esc(d.name || "")} · ${esc(d.role || "")}</span><small class="muted">${c.booking.movedFrom ? `was ${esc(dayLabel(c.booking.movedFrom))}, ${hhmm(c.booking.movedFrom)} · ` : ""}by ${esc(c.booking.by || "")}</small>
         <div class="aic-btns"><button class="sm" data-act="copyconf" data-id="${esc(c.id)}">Copy confirmation text</button>${appt ? `<button class="sm danger ${caseArmed === "cancel" ? "armed" : ""}" data-act="apptcancel" data-p="${esc(pt.id)}" data-v="${esc(appt.id)}">${caseArmed === "cancel" ? "Confirm" : "Cancel appointment"}</button>` : ""}</div></div>`;
     }
     if (c.status === "noted") {
@@ -1976,19 +2145,34 @@ function clientApp() {
         <div class="aic-btns">${w ? `<button class="sm" data-act="opencase" data-id="${esc(w.id)}">Open the waiting request</button>` : ""}<button class="sm" data-act="reopen" data-id="${esc(c.id)}">Move to To book</button></div></div>`;
     }
     if (c.status === "closed") return `<div class="booked closed"><b>Closed without booking</b><span class="muted">${c.closedBy ? "by " + esc(c.closedBy) : ""}</span><div class="aic-btns"><button class="sm" data-act="reopen" data-id="${esc(c.id)}">Reopen</button></div></div>`;
-    const doc = docOf(caseDoc) || S.doctors[0], s = c.summary || {}, pf = prefers(c);
+    const doc = docOf(caseDoc) || S.doctors[0], s = c.summary || {}, pf = prefers(c), pt = byPatient(c.patientId), up = upcomingOf(pt);
+    const mv = caseMove && up.find(a => a.id === caseMove), rule = ruleFor(c, caseMove, doc.id);
     const days = workDays(doc);
-    if (!caseDay || !days.includes(caseDay)) { caseDay = (days.find(d => slotsFor(doc, d).some(x => x.free)) || days[0] || 0); caseSlot = 0; }
-    const sl = caseDay ? slotsFor(doc, caseDay) : [];
+    if (!caseDay || !days.includes(caseDay)) { caseDay = (days.find(d => slotsFor(doc, d, rule).some(usable)) || days[0] || 0); caseSlot = 0; }
+    const sl = caseDay ? slotsFor(doc, caseDay, rule) : [];
     const docs = S.doctors.slice().sort((a, b) => (b.id === s.doctor) - (a.id === s.doctor) || (b.spec.includes(s.specialty)) - (a.spec.includes(s.specialty)));
+    const ok = (d, at) => { const dd = docOf(d); return dd && slotsFor(dd, sod(at), ruleFor(c, caseMove, d)).some(x => x.at === at && usable(x)); };
+    const tLabel = (d, at) => `${esc(dayLabel(at))}, ${hhmm(at)} with ${esc((docOf(d) || {}).short || "")}`;
+    const pl = c.plan && (c.plan.move || "") === caseMove ? c.plan : null;
+    const reasons = [...new Set(sl.filter(x => x.free && x.why).map(x => x.why))];
     return `<div class="bk">
+      ${mv || up.length && c.intent === "change_visit" ? `<label class="lbl-s" for="bkmove">Visit to move</label>
+        <select id="bkmove" class="voicesel bkmove"><option value="">None: book a new visit</option>${up.map(a => `<option value="${esc(a.id)}" ${a.id === caseMove ? "selected" : ""}>${esc(dayLabel(a.at))}, ${hhmm(a.at)} · ${esc((docOf(a.doctor) || {}).short || "")} · ${esc(a.reason || "")}</option>`).join("")}</select>` : ""}
+      ${up.length && !mv ? `<p class="note">📅 Already booked: ${up.map(a => `${esc(dayLabel(a.at))} ${hhmm(a.at)} with ${esc((docOf(a.doctor) || {}).short || "")}`).join("; ")}</p>` : ""}
+      ${caseSug ? `<div class="sug"><p><span class="sug-k">Suggested</span> <b>${tLabel(caseSug.doctor, caseSug.at)}</b><small>${esc(caseSug.why)}</small></p>${caseSlot === caseSug.at && caseDoc === caseSug.doctor ? `<span class="sug-on">✓ Selected</span>` : ok(caseSug.doctor, caseSug.at) ? `<button class="sm" data-act="usetime" data-v="${esc(caseSug.doctor)}|${caseSug.at}">Use</button>` : ""}</div>` : ""}
+      ${pl ? `<div class="sug ai"><p><span class="sug-k">✦ AI plan · ${esc(PN[pl.provider] || "AI")}</span> <b>${tLabel(pl.doctor, pl.at)}</b><small>${esc(pl.why)}</small>
+          ${pl.warnings.map(w => `<small class="sug-w">⚠ ${esc(w)}</small>`).join("")}
+          ${pl.alts.length ? `<span class="sug-alt">Or: ${pl.alts.map(x => ok(x.doctor, x.at) ? `<button class="link small" data-act="usetime" data-v="${esc(x.doctor)}|${x.at}">${tLabel(x.doctor, x.at)}</button>` : "").join(" ")}</span>` : ""}</p>
+          ${!ok(pl.doctor, pl.at) ? `<span class="muted">No longer free</span>` : caseSlot === pl.at && caseDoc === pl.doctor ? `<span class="sug-on">✓ Selected</span>` : `<button class="sm" data-act="usetime" data-v="${esc(pl.doctor)}|${pl.at}">Use</button>`}</div>`
+        : S.settings.ai && S.settings.hasKey ? `<button class="link small" data-act="planai" data-id="${esc(c.id)}" ${planBusy[c.id] ? "disabled" : ""}>${planBusy[c.id] ? "✦ Planning…" : "✦ Ask AI to plan this visit"}</button>` : ""}
       ${s.hint ? `<p class="bk-hint">${s.kind === "ai" ? "✦ " : ""}${esc(s.hint)}</p>` : ""}
       <label class="lbl-s" for="bkdoc">Dentist</label>
       <select id="bkdoc" class="voicesel bkdoc">${docs.map(d => `<option value="${esc(d.id)}" ${d.id === doc.id ? "selected" : ""}>${esc(d.name)} · ${esc(d.role)}${d.id === s.doctor ? " (suggested)" : ""}</option>`).join("")}</select>
-      <div class="days" role="tablist" aria-label="Day">${days.map(d => { const free = slotsFor(doc, d).filter(x => x.free).length; return `<button class="day ${d === caseDay ? "on" : ""}" data-act="bkday" data-v="${d}" ${free ? "" : "disabled"}><small>${esc(new Date(d).toLocaleDateString(undefined, { weekday: "short" }))}</small><b>${new Date(d).getDate()}</b><i>${free ? free + " free" : "full"}</i></button>`; }).join("")}</div>
-      <div class="slots">${sl.length ? sl.map(x => `<button class="slot ${x.at === caseSlot ? "on" : ""} ${x.free && prefOk(pf, x.at) ? "pref" : ""}" data-act="bkslot" data-v="${x.at}" ${x.free ? "" : "disabled"}>${hhmm(x.at)}</button>`).join("") : `<p class="muted">No times left on this day.</p>`}</div>
+      <div class="days" role="tablist" aria-label="Day">${days.map(d => { const x = slotsFor(doc, d, rule), n = x.filter(usable).length, blocked = !n && x.some(y => y.free && y.why); return `<button class="day ${d === caseDay ? "on" : ""}" data-act="bkday" data-v="${d}" ${n ? "" : "disabled"}><small>${esc(new Date(d).toLocaleDateString(undefined, { weekday: "short" }))}</small><b>${new Date(d).getDate()}</b><i>${n ? n + " free" : blocked ? "not allowed" : "full"}</i></button>`; }).join("")}</div>
+      <div class="slots">${sl.length ? sl.map(x => `<button class="slot ${x.at === caseSlot ? "on" : ""} ${usable(x) && prefOk(pf, x.at) ? "pref" : ""} ${x.free && x.why ? "rule" : ""}" data-act="bkslot" data-v="${x.at}" ${usable(x) ? "" : "disabled"} ${x.why ? `title="${esc(x.why)}"` : ""}>${hhmm(x.at)}</button>`).join("") : `<p class="muted">No times left on this day.</p>`}</div>
       ${pf.any ? `<p class="note"><span class="pref-dot"></span> Matches what the caller asked for</p>` : ""}
-      <button class="primary block" data-act="book" ${caseSlot && !caseBusy ? "" : "disabled"}>${caseBusy ? "Booking…" : caseSlot ? `Book ${esc(dayLabel(caseSlot))}, ${hhmm(caseSlot)} with ${esc(doc.short)}` : "Pick a time"}</button>
+      ${reasons.length ? `<p class="note rule-n">Not offered: ${reasons.map(esc).join(" · ")}</p>` : ""}
+      <button class="primary block" data-act="book" ${caseSlot && !caseBusy ? "" : "disabled"}>${caseBusy ? "Booking…" : caseSlot ? `${mv ? "Move to" : "Book"} ${esc(dayLabel(caseSlot))}, ${hhmm(caseSlot)} with ${esc(doc.short)}` : "Pick a time"}</button>
       <button class="ghost block danger ${caseArmed === "close" ? "armed" : ""}" data-act="caseclose" data-id="${esc(c.id)}">${caseArmed === "close" ? "Confirm: close without booking" : "Close without booking"}</button>
     </div>`;
   }
@@ -2099,6 +2283,125 @@ function clientApp() {
         : `<div class="empty"><h2>No one found</h2><p>${q ? "Try another name or number." : patFilter !== "all" ? "Nobody in this group right now." : "Patients appear here after their first call."}</p>${patFilter !== "all" ? `<button class="primary" data-act="pfilter" data-v="all">Show everyone</button>` : ""}</div>`}`;
   }
   const digitsOf = s => String(s || "").replace(/\D/g, "");
+  const clip = (x, n) => { x = String(x || ""); return x.length <= n ? x : x.slice(0, n).replace(/[\s,;:.]+\S*$/, "") + "…"; };   // at a word, not mid-number
+  // Calendar: how full the clinic is by day, week and month, and the trends. The diary is the made-up patients
+  // (mockTaken) plus the visits booked in Frontly.
+  let calView = "week", calDay = 0;
+  const calCache = new Map();
+  function load(doc, day) {
+    if (!doc.days.includes(new Date(day).getDay())) return null;
+    const key = doc.id + day;
+    if (calCache.has(key)) return calCache.get(key);
+    const ours = new Map();
+    S.patients.forEach(p => (p.appts || []).forEach(a => { if (a.doctor === doc.id && (a.status === "booked" || a.status === "done") && a.at >= day && a.at < day + DAY) ours.set(a.at, { p, a }); }));
+    const cells = slotTimes(doc, day).map(t => ours.has(t) ? { t, k: "ours", x: ours.get(t) } : mockTaken(doc, t) ? { t, k: "taken" } : { t, k: "free" });
+    const used = cells.filter(c => c.k !== "free").length, r = { cells, used, total: cells.length, ours: cells.filter(c => c.k === "ours").length, pct: cells.length ? Math.round(used * 100 / cells.length) : 0 };
+    calCache.set(key, r); return r;
+  }
+  function clinicLoad(day, docs = S.doctors) {
+    let used = 0, total = 0, ours = 0;
+    docs.forEach(d => { const l = load(d, day); if (l) { used += l.used; total += l.total; ours += l.ours; } });
+    return total ? { used, total, ours, pct: Math.round(used * 100 / total) } : null;
+  }
+  const monday = t => { const d = new Date(sod(t)); return sod(d.getTime() - ((d.getDay() + 6) % 7) * DAY + 3600e3); };
+  const addDays = (t, n) => sod(sod(t) + n * DAY + 12 * 3600e3);   // midday, so a clock change never lands on the wrong day
+  const weekDays = t => [0, 1, 2, 3, 4].map(i => addDays(monday(t), i));
+  function weekLoad(t) {
+    let used = 0, total = 0; weekDays(t).forEach(d => { const l = clinicLoad(d); if (l) { used += l.used; total += l.total; } });
+    return total ? Math.round(used * 100 / total) : 0;
+  }
+  const shortDoc = d => d.short.replace(/^Dr\. /, "").replace(/ \(.*\)$/, "");
+  const heat = pct => `<span class="heat" style="opacity:${(0.08 + Math.min(1, pct / 100) * 0.62).toFixed(2)}"></span>`;
+  const fmtD = (t, o) => new Date(t).toLocaleDateString(undefined, o);
+  const vsLast = (a, b, unit = " points") => a === b ? "the same as" : `${a > b ? "▲ up" : "▼ down"} ${Math.abs(a - b)}${unit} on`;
+  function calHTML() {
+    calCache.clear();
+    if (!calDay) calDay = sod(Date.now());
+    const views = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["trends", "Trends"]];
+    const title = calView === "day" ? fmtD(calDay, { weekday: "long", day: "numeric", month: "long" })
+      : calView === "week" ? `${fmtD(monday(calDay), { day: "numeric", month: "short" })} – ${fmtD(addDays(monday(calDay), 4), { day: "numeric", month: "short" })}`
+      : calView === "month" ? fmtD(calDay, { month: "long", year: "numeric" }) : "Trends";
+    return `<div class="segbar"><div class="seg wide">${views.map(([v, l]) => `<button class="${calView === v ? "on" : ""}" data-act="calview" data-v="${v}" aria-pressed="${calView === v}">${l}</button>`).join("")}</div></div>
+      <div class="calwrap">${calView === "trends" ? "" : `<div class="calnav"><button class="cn-b" data-act="calstep" data-v="-1" aria-label="Earlier">‹</button><b>${esc(title)}</b><button class="cn-b" data-act="calstep" data-v="1" aria-label="Later">›</button>${sod(calDay) !== sod(Date.now()) ? `<button class="link small" data-act="caltoday">Today</button>` : ""}</div>`}
+      ${calView === "day" ? calDayHTML() : calView === "week" ? calWeekHTML() : calView === "month" ? calMonthHTML() : calTrendsHTML()}
+      <p class="note cal-k"><i class="k taken"></i> Other patients (made up) <i class="k ours"></i> Booked in Frontly <i class="k free"></i> Free</p></div>`;
+  }
+  function calDayHTML() {
+    const cl = clinicLoad(calDay);
+    if (!cl) return `<div class="empty"><h2>The clinic is closed</h2><p>No dentist works on ${esc(fmtD(calDay, { weekday: "long" }))}s.</p></div>`;
+    const ours = [];
+    const rows = S.doctors.map(d => {
+      const l = load(d, calDay);
+      if (!l) return `<div class="cdoc off"><div class="cd-h"><b>${esc(d.short)}</b><small>Not working</small></div></div>`;
+      l.cells.filter(c => c.k === "ours").forEach(c => ours.push(Object.assign({ d }, c)));
+      return `<div class="cdoc"><div class="cd-h"><b>${esc(d.short)}</b><small>${esc(d.role)}</small><span class="cd-p">${l.pct}%</span></div>
+        <div class="strip" role="img" aria-label="${esc(d.short)}: ${l.used} of ${l.total} times taken">${l.cells.map(c => `<i class="${c.k}" title="${hhmm(c.t)}"></i>`).join("")}</div>
+        <div class="ticks"><span>${pad2(d.from)}:00</span><span>${pad2(Math.round((d.from + d.to) / 2))}:00</span><span>${pad2(d.to)}:00</span></div></div>`;
+    }).join("");
+    ours.sort((a, b) => a.t - b.t);
+    return `<div class="calsum"><b>${cl.pct}%</b><span>of the day's times are taken<small>${cl.used} of ${cl.total} · ${cl.ours} booked in Frontly</small></span></div>
+      ${rows}
+      <h3 class="sec2">Booked in Frontly</h3>
+      ${ours.length ? ours.map(o => `<button class="crow" data-act="openpat" data-id="${esc(o.x.p.id)}"><span class="cr-t">${hhmm(o.t)}</span><span class="grow"><b>${esc(o.x.p.name)}</b><small>${esc(o.x.a.reason || "Visit")} · ${esc(o.d.short)}${o.x.a.status === "done" ? " · done" : ""}</small></span><span class="chev">›</span></button>`).join("") : `<p class="muted">No visits booked in Frontly on this day.</p>`}`;
+  }
+  function calWeekHTML() {
+    const days = weekDays(calDay), today = sod(Date.now());
+    const head = `<tr><th></th>${days.map(d => `<th class="${d === today ? "today" : ""}">${esc(fmtD(d, { weekday: "short" }))}<small>${new Date(d).getDate()}</small></th>`).join("")}</tr>`;
+    const body = S.doctors.map(doc => `<tr><th class="rh" title="${esc(doc.name)}">${esc(shortDoc(doc))}</th>${days.map(d => { const l = load(doc, d); return l ? `<td><button class="hcell" data-act="calday" data-v="${d}" aria-label="${esc(doc.short)}, ${esc(fmtD(d, { weekday: "long" }))}: ${l.pct}%">${heat(l.pct)}<b>${l.pct}</b>${l.ours ? `<i class="dot" aria-hidden="true"></i>` : ""}</button></td>` : `<td><span class="hcell off">–</span></td>`; }).join("")}</tr>`).join("");
+    const foot = `<tr class="tot"><th class="rh">Clinic</th>${days.map(d => { const l = clinicLoad(d); return `<td><button class="hcell" data-act="calday" data-v="${d}">${heat(l ? l.pct : 0)}<b>${l ? l.pct : "–"}</b></button></td>`; }).join("")}</tr>`;
+    const w = weekLoad(calDay), prev = weekLoad(addDays(calDay, -7));
+    return `<div class="calsum"><b>${w}%</b><span>of the week's times are taken<small>${vsLast(w, prev)} the week before (${prev}%)</small></span></div>
+      <div class="hscroll"><table class="heatgrid"><col class="rhc">${head}${body}${foot}</table></div>
+      <p class="note">Numbers are percent taken. A dot: someone booked in Frontly. Tap a day to see it.</p>`;
+  }
+  function calMonthHTML() {
+    const d0 = new Date(calDay); d0.setDate(1); d0.setHours(0, 0, 0, 0);
+    const first = d0.getTime(), start = monday(first), month = d0.getMonth(), today = sod(Date.now());
+    const cells = [];
+    for (let i = 0; i < 42; i++) {
+      const d = addDays(start, i);
+      if (i >= 35 && new Date(d).getMonth() !== month) break;
+      const inM = new Date(d).getMonth() === month, l = inM ? clinicLoad(d) : null;
+      cells.push(!inM ? `<span class="mcell out"></span>` : l ? `<button class="mcell" data-act="calday" data-v="${d}" aria-label="${esc(fmtD(d, { day: "numeric", month: "long" }))}: ${l.pct}%">${heat(l.pct)}<small class="${d === today ? "today" : ""}">${new Date(d).getDate()}</small><b>${l.pct}%</b>${l.ours ? `<i class="dot"></i>` : ""}</button>` : `<span class="mcell closed"><small>${new Date(d).getDate()}</small></span>`);
+    }
+    let used = 0, total = 0; for (let d = first; new Date(d).getMonth() === month; d = addDays(d, 1)) { const l = clinicLoad(d); if (l) { used += l.used; total += l.total; } }
+    return `<div class="calsum"><b>${total ? Math.round(used * 100 / total) : 0}%</b><span>of the month's times are taken<small>${used} of ${total} times</small></span></div>
+      <div class="month">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(x => `<span class="mh">${x}</span>`).join("")}${cells.join("")}</div>`;
+  }
+  function bars(items, unit) {
+    const max = Math.max(1, ...items.map(x => x.v));
+    return `<div class="bars" role="img" aria-label="${esc(items.map(x => x.label + " " + x.v + unit).join(", "))}">${items.map(x => `<div class="bar ${x.cls || ""}"><b>${x.v}${unit}</b><span class="b-col">${x.v2 != null ? `<i class="b2" style="height:${Math.round(x.v2 * 100 / max)}%"></i>` : ""}<i style="height:${Math.round((x.v - (x.v2 || 0)) * 100 / max)}%"></i></span><small>${esc(x.label)}</small></div>`).join("")}</div>`;
+  }
+  function calTrendsHTML() {
+    const now = sod(Date.now()), wk = monday(now);
+    const weeks = []; for (let i = -7; i <= 3; i++) { const m = addDays(wk, i * 7); weeks.push({ label: `${new Date(m).getDate()}/${new Date(m).getMonth() + 1}`, v: weekLoad(m), cls: i === 0 ? "now" : i > 0 ? "ahead" : "" }); }
+    const wdays = [1, 2, 3, 4, 5].map(dw => { let s = 0, n = 0; for (let i = -8; i < 0; i++) { const l = clinicLoad(addDays(wk, i * 7 + dw - 1)); if (l) { s += l.pct; n++; } } return { label: fmtD(addDays(wk, dw - 1), { weekday: "short" }), long: fmtD(addDays(wk, dw - 1), { weekday: "long" }), v: n ? Math.round(s / n) : 0, dw }; });
+    const next14 = []; for (let i = 0; i < 14; i++) next14.push(addDays(now, i));
+    const docs = S.doctors.map(d => { let used = 0, total = 0; next14.forEach(t => { const l = load(d, t); if (l) { used += l.used; total += l.total; } }); return { d, label: shortDoc(d), v: total ? Math.round(used * 100 / total) : 0 }; });
+    const days14 = []; for (let i = 13; i >= 0; i--) { const d = addDays(now, -i), cs = S.calls.filter(c => sod(c.at) === d); days14.push({ label: String(new Date(d).getDate()), v: cs.length, v2: cs.filter(c => ["emergency", "urgent"].includes((c.summary || {}).triage)).length, cls: d === now ? "now" : "" }); }
+    const c7 = S.calls.filter(c => c.at >= now - 6 * DAY).length, p7 = S.calls.filter(c => c.at >= now - 13 * DAY && c.at < now - 6 * DAY).length;
+    const need = S.calls.filter(c => c.status === "waiting" || c.status === "booked"), bk = need.filter(c => c.status === "booked");
+    const fast = bk.filter(c => c.booking && c.booking.made - c.at < DAY).length;
+    const thisW = weekLoad(wk), lastW = weekLoad(addDays(wk, -7)), busiest = wdays.slice().sort((a, b) => b.v - a.v)[0], quiet = wdays.slice().sort((a, b) => a.v - b.v)[0];
+    const hot = docs.slice().sort((a, b) => b.v - a.v)[0], spare = docs.filter(x => x.d !== hot.d && x.d.spec.some(sp => hot.d.spec.includes(sp))).sort((a, b) => a.v - b.v)[0];
+    const insights = [
+      `${busiest.long} is the busiest day (${busiest.v}% on average), ${quiet.long} the quietest (${quiet.v}%): offer ${quiet.long} first to anyone flexible.`,
+      hot.v >= 70 ? `${hot.d.short} is ${hot.v}% taken for the next two weeks${spare ? `; ${spare.d.short} covers some of the same work and is at ${spare.v}%` : ""}.` : `No dentist is over 70% for the next two weeks; ${hot.d.short} is the fullest at ${hot.v}%.`,
+      `This week is ${thisW}% taken, ${vsLast(thisW, lastW).replace(/^[▲▼] /, "")} last week.`,
+    ];
+    return `<div class="tiles">
+        <div class="tile"><small>This week</small><b>${thisW}%</b><span>${vsLast(thisW, lastW)} last week</span></div>
+        <div class="tile"><small>Next two weeks</small><b>${Math.round(docs.reduce((n, x) => n + x.v, 0) / docs.length)}%</b><span>taken so far</span></div>
+        <div class="tile"><small>Calls, last 7 days</small><b>${c7}</b><span>${p7 ? `${vsLast(c7, p7, "")} the 7 days before` : "none the 7 days before"}</span></div>
+        <div class="tile"><small>Booked within a day</small><b>${bk.length ? Math.round(fast * 100 / bk.length) : 0}%</b><span>${bk.length} of ${need.length} booked</span></div>
+      </div>
+      <ul class="insights">${insights.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
+      <h3 class="sec2">Clinic occupancy by week</h3>${bars(weeks, "%")}<p class="note">The last bars are weeks ahead: they fill up as people call.</p>
+      <h3 class="sec2">Busiest days of the week</h3>${bars(wdays, "%")}<p class="note">The average over the last eight weeks.</p>
+      <h3 class="sec2">Dentists, next two weeks</h3>${bars(docs, "%")}
+      <h3 class="sec2">Calls per day</h3>${bars(days14, "")}<p class="note"><i class="k urgent"></i> urgent or emergency · the last 14 days</p>`;
+  }
+
   function renderPat() {
     const el = $("#patsheet"), keep = el.scrollTop, p = patId && byPatient(patId);
     el.classList.toggle("open", !!p); lockBody();
@@ -2183,12 +2486,24 @@ function clientApp() {
       case "caseclosesheet": caseId = ""; renderCase(); break;
       case "txtoggle": showTx = !showTx; renderCase(); break;
       case "bkday": caseDay = +v; caseSlot = 0; renderCase(); break;
+      case "calview": calView = v; render(); break;
+      case "calday": calDay = +v; calView = "day"; render(); scrollTo(0, 0); break;
+      case "caltoday": calDay = sod(Date.now()); render(); break;
+      case "calstep": {
+        const n = +v, d = new Date(calDay || sod(Date.now()));
+        if (calView === "month") { d.setDate(1); d.setMonth(d.getMonth() + n); calDay = sod(d.getTime()); }
+        else if (calView === "week") calDay = addDays(calDay, 7 * n);
+        else { let t = addDays(calDay, n); for (let i = 0; i < 7 && !clinicLoad(t); i++) t = addDays(t, n); calDay = t; }   // skip closed days
+        render(); break;
+      }
+      case "usetime": { const [d, at] = String(v).split("|"); useTime(d, +at); renderCase(); break; }
+      case "planai": { const c = byCall(id); if (c) askPlan(c); break; }
       case "bkslot": caseSlot = +v; renderCase(); break;
       case "book": {
         if (!caseSlot || caseBusy) break;
         caseBusy = true; renderCase();
         const at = caseSlot, doc = docOf(caseDoc);
-        send("book", { id: caseId, doctor: caseDoc, at }, (ok, msg) => {
+        send("book", { id: caseId, doctor: caseDoc, at, move: caseMove }, (ok, msg) => {
           caseBusy = false;
           if (ok) { caseSlot = 0; toast(`Booked ${dayLabel(at)}, ${hhmm(at)} with ${doc ? doc.short : "the dentist"}`); }
           else { toast(msg || "Not booked"); caseSlot = 0; }
@@ -2294,8 +2609,9 @@ function clientApp() {
     if (c.contains("ttsvoicesel")) { S.settings.ttsVoice = e.target.value; send("set", { k: "ttsVoice", v: e.target.value }); return; }
     if (c.contains("ttsmodelsel")) { S.settings.ttsModel = e.target.value; send("set", { k: "ttsModel", v: e.target.value }); renderCfg(); return; }
     if (c.contains("ttsinstr")) { S.settings.ttsInstructions = e.target.value.trim(); send("set", { k: "ttsInstructions", v: S.settings.ttsInstructions }); return; }
-    if (c.contains("voicesel") && !c.contains("bkdoc") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
+    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
     if (c.contains("bkdoc")) { caseDoc = e.target.value; caseDay = 0; caseSlot = 0; renderCase(); return; }
+    if (c.contains("bkmove")) { caseMove = e.target.value; const cc = byCall(caseId); caseSug = cc ? suggest(cc, caseMove) : null; if (caseSug) useTime(caseSug.doctor, caseSug.at); else { caseDay = 0; caseSlot = 0; } renderCase(); return; }
     if (c.contains("modelsel")) send("aimodel", { p: e.target.dataset.p, v: e.target.value });
     if (c.contains("linein")) { send("set", { k: "bridgeUrl", v: e.target.value }); return; }
     if (c.contains("cfgin") && e.target.dataset.k) {
@@ -2562,6 +2878,87 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .appt b{display:block;font-weight:650}
 .appt small{display:block;color:var(--ink-2);font-size:calc(13px * var(--ts))}
 .appt.msg b,.appt.msg small{white-space:normal;overflow:visible;overflow-wrap:anywhere}
+/* one patient, several calls: a stacked card */
+.qgroup{position:relative;display:flex;flex-direction:column;gap:2px;background:var(--sheet);border:1px solid var(--rule);border-radius:18px;padding:12px 14px 6px 20px;overflow:hidden;margin-bottom:10px;box-shadow:0 5px 0 -2px var(--paper),0 5px 0 -1px var(--rule),0 10px 0 -4px var(--paper),0 10px 0 -3px var(--rule)}
+.qgroup>.stripe{position:absolute;left:0;top:0;bottom:0;width:6px}
+.qg-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;justify-content:space-between}
+.qg-head .q-name{font-size:calc(19px * var(--ts))}
+.qg-visits{display:flex;flex-direction:column;gap:2px;margin:4px 0 2px}
+.qrow{display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center;text-align:left;background:none;border:0;border-top:1px solid var(--rule);padding:10px 0;color:inherit;font:inherit;width:100%}
+.qrow .q-top,.qrow .q-why,.qrow .q-bk{grid-column:1}
+.qrow .chev{grid-column:2;grid-row:1/span 3;color:var(--muted)}
+/* booking: the suggestion and the AI plan */
+.sug{display:flex;align-items:center;gap:10px;border:1px solid var(--rule);border-radius:14px;padding:10px 12px;margin:0 0 10px;background:var(--paper)}
+.sug p{margin:0;flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.sug b{font-weight:700}
+.sug small{color:var(--ink-2);font-size:calc(13px * var(--ts))}
+.sug .sug-w{color:var(--amber)}
+.sug-k{font-size:calc(12px * var(--ts));font-weight:700;color:var(--signal);text-transform:uppercase;letter-spacing:.04em}
+.sug.ai{border-color:var(--signal)}
+.sug-on{color:var(--signal);font-weight:700;font-size:calc(13px * var(--ts));white-space:nowrap}
+.sug-alt{font-size:calc(13px * var(--ts));color:var(--muted)}
+.slot.rule{text-decoration:line-through dotted;opacity:.55}
+.rule-n{color:var(--amber)}
+/* calendar */
+.calwrap{max-width:680px;margin:0 auto;padding:4px 16px 0}
+.calnav{display:flex;align-items:center;gap:8px;margin:8px 0 6px}
+.calnav b{flex:1;text-align:center;font-size:calc(17px * var(--ts))}
+.cn-b{width:40px;height:40px;border-radius:12px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);font-size:22px}
+.calsum{display:flex;align-items:center;gap:14px;background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:12px 16px;margin:8px 0 12px}
+.calsum>b{font-size:calc(34px * var(--ts));font-weight:800;color:var(--signal);font-variant-numeric:tabular-nums}
+.calsum span{display:flex;flex-direction:column;font-size:calc(15px * var(--ts))}
+.calsum small{color:var(--muted);font-size:calc(13px * var(--ts))}
+.cdoc{background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:10px 12px;margin-bottom:8px}
+.cdoc.off{opacity:.55}
+.cd-h{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.cd-h small{color:var(--muted);flex:1;font-size:calc(13px * var(--ts))}
+.cd-p{font-weight:700;font-variant-numeric:tabular-nums}
+.strip{display:flex;gap:2px;height:22px}
+.strip i,.k{flex:1;border-radius:3px;background:var(--rule)}
+.strip i.taken,.k.taken{background:var(--ink-2);opacity:.45}
+.strip i.ours,.k.ours{background:var(--signal)}
+.strip i.free,.k.free{background:var(--rule)}
+.k{display:inline-block;width:12px;height:12px;vertical-align:-2px;margin:0 2px 0 8px;flex:none}
+.k.urgent{background:var(--amber)}
+.ticks{display:flex;justify-content:space-between;color:var(--muted);font-size:calc(11.5px * var(--ts));margin-top:3px;font-variant-numeric:tabular-nums}
+.cr-t{font-weight:700;font-variant-numeric:tabular-nums;min-width:3em}
+.hscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px}
+.heatgrid{border-collapse:separate;border-spacing:3px;width:100%;table-layout:fixed}
+.heatgrid col.rhc{width:27%}
+.heatgrid th{font-size:calc(12.5px * var(--ts));font-weight:650;color:var(--ink-2);text-align:center}
+.heatgrid th small{display:block;color:var(--muted);font-weight:500}
+.heatgrid th.today{color:var(--signal)}
+.heatgrid th.rh{text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:calc(12px * var(--ts))}
+.heatgrid tr.tot th,.heatgrid tr.tot b{font-weight:800}
+.hcell,.mcell{position:relative;display:flex;align-items:center;justify-content:center;width:100%;min-height:40px;border-radius:10px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);font:inherit;overflow:hidden;padding:0}
+.hcell b,.mcell b{position:relative;font-variant-numeric:tabular-nums;font-size:calc(14px * var(--ts))}
+.hcell.off{color:var(--muted);background:none;border-style:dashed}
+.heat{position:absolute;inset:0;background:var(--signal)}
+.dot{position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%;background:var(--ink)}
+.month{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.mh{text-align:center;font-size:calc(12px * var(--ts));color:var(--muted);font-weight:650}
+.mcell{flex-direction:column;min-height:52px}
+.mcell small{position:relative;font-size:calc(12px * var(--ts));color:var(--ink-2)}
+.mcell small.today{color:var(--signal);font-weight:800}
+.mcell b{font-size:calc(12.5px * var(--ts))}
+.mcell.out{border:0;background:none}
+.mcell.closed{background:none;border-style:dashed;color:var(--muted)}
+.cal-k{margin-top:14px}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+.tile{background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column}
+.tile small{color:var(--muted);font-size:calc(12.5px * var(--ts))}
+.tile b{font-size:calc(26px * var(--ts));font-weight:800;font-variant-numeric:tabular-nums}
+.tile span{color:var(--ink-2);font-size:calc(12.5px * var(--ts))}
+.insights{margin:6px 0 4px;padding-left:18px;color:var(--ink-2);font-size:calc(14.5px * var(--ts));display:flex;flex-direction:column;gap:6px}
+.bars{display:flex;align-items:stretch;gap:4px;height:150px;padding:4px 0}
+.bar{flex:1;display:flex;flex-direction:column;align-items:center;min-width:0}
+.bar b{font-size:calc(10.5px * var(--ts));color:var(--ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.b-col{flex:1;width:100%;display:flex;flex-direction:column-reverse;justify-content:flex-start;gap:0}
+.b-col i{display:block;width:100%;background:var(--ink-2);opacity:.5;border-radius:4px 4px 0 0}
+.b-col i.b2{background:var(--amber);opacity:1;border-radius:0}
+.bar.now .b-col i:not(.b2){background:var(--signal);opacity:1}
+.bar.ahead .b-col i:not(.b2){background:var(--signal);opacity:.35}
+.bar small{font-size:calc(10.5px * var(--ts));color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .cfgin.wide{display:block;width:100%;margin:8px 0;font:16px/1.45 var(--sans);padding:9px 11px;border-radius:10px;border:1px solid var(--rule);background:var(--paper);color:var(--ink);-webkit-user-select:text;user-select:text}
 textarea.cfgin.wide{resize:vertical}
 
@@ -2832,6 +3229,7 @@ window.__boot = function (st) {
     var d = document.documentElement; d.style.transform = "translateZ(0)"; void d.offsetHeight;
     requestAnimationFrame(function () { d.style.transform = ""; });
   });
+  ${visitConflict.toString()}
   (${clientApp.toString()})();
 };</script>
 </body></html>`;
