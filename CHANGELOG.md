@@ -1,0 +1,16 @@
+# Changelog
+
+All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
+
+## 1.0.0 (2026-11-12): Meet Reva, the virtual receptionist
+
+- 📞 **Call the clinic**: Ring a demo dental clinic from your iPhone. Reva answers, asks what's wrong, how much it hurts and when you can come, and you answer by voice or by typing.
+- 📝 **A note ready to book**: Every call ends with a note for the front desk: urgency, red flags, the right dentist and, with AI, how the caller sounded.
+- 🗓️ **Be the receptionist**: Sign in to the front desk, work the queue most urgent first, and book each caller into a free slot with the right dentist.
+
+**Changes**
+
+- First release: the Call tab (known patients recognised by phone number, new callers get a record), the live call screen with Reva's notes filling in, the Front desk queue and booking, and Patients
+- Reva follows a script in English or Lithuanian without AI; with a Claude or OpenAI key she holds a real conversation, reads the caller's mood and writes the note
+- With an OpenAI key Reva can speak with an AI voice and callers can be transcribed by OpenAI; otherwise an iPhone voice and iPhone dictation
+- Blueprints: Stability patterns 1.0.2, In-app updates 1.1.1, Settings 2.0.1, AI configuration 1.0.2, Launch screen 1.0.2, Widgets 1.1.1, AI invitation 1.2.2, Sound in silent mode 1.0.2; recipes: safe start-up 1.1.0, portable bridge 1.0.0, testing 1.2.2
