@@ -137,6 +137,10 @@ Without AI the note is put together from these answers by fixed rules; with AI, 
 
 </details>
 
+### Take real calls (optional)
+
+Give Reva a real phone number: a Twilio number, answered by an ElevenLabs agent with Reva's instructions, and a small free Cloudflare Worker that tells her who's calling and hands finished calls to Frontly. They land at the front desk like any other call, marked 📞, filed under the caller's record. Setup, step by step: [bridge/README.md](bridge/README.md).
+
 ### Start the demo again
 
 **Settings › Demo › Start the demo again** puts back the three demo patients and the one waiting call, and removes every call and booking made since.
@@ -168,6 +172,7 @@ Tap the sliders icon at the top. Changes apply at once and are saved in `setting
 | Appearance | Colours (Auto or six palettes), layout (Comfortable, Compact, Tiny), text size, headline font |
 | Calls | Language of the call, Reva's voice (iPhone or AI voice, which voice, how she sounds), how Reva hears you, listening on its own, AI settings |
 | Front desk | Who is signed in; sign out |
+| Phone line | The bridge's address and token, its status, Reva's instructions for ElevenLabs |
 | Demo | Start the demo again |
 | Updates | Offer new versions, check now, the start-up log |
 | Clinic, Calls, Booking, Widget | The clinic's and receptionist's names, questions per call, the pause before listening, days to offer, appointment length, how full the demo diary is, widget refresh; each with Reset |
@@ -181,7 +186,8 @@ Frontly checks this repository for a new version each time it opens. When one is
 
 - Patients, calls and settings are JSON files in iCloud Drive › Scriptable › Frontly, or on the iPhone when it has no iCloud.
 - Without a key nothing leaves the phone except the update check. With a key, each answer you give during a call (with the call so far) goes to the provider in use, and the finished call goes to it once for the note; with the AI voice, each line Reva says goes to OpenAI, and with OpenAI transcription, each recorded answer does too.
-- AI keys stay in the iOS Keychain and are only sent to their own provider.
+- With the real phone line set up, calls go through Twilio and ElevenLabs and your own Cloudflare bridge, and Frontly sends the bridge a short patient list (name, age, number, last and next visit) so Reva can greet known callers. See [bridge/README.md](bridge/README.md#privacy).
+- AI keys and the phone line's token stay in the iOS Keychain and are only sent to their own service.
 - The update check only downloads `releases.json` from this repository.
 
 ## How it works

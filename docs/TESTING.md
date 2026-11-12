@@ -26,8 +26,13 @@ node ../app-blueprints/testkit/bin/run.js -v 04    # one scenario, every step
 | 07-no-dictation | Lithuanian with dictation failing as on a real iPhone: the keyboard opens with a plain explanation, dictation isn't retried, and the choice is remembered in settings.json, the Call tab and Settings |
 | 08-transcribe-hands-free | Lithuanian with an OpenAI key and a fake microphone: dictation fails once, the page records, stops on its own when the caller pauses, OpenAI transcribes, Reva answers and the microphone opens again with no tap |
 | 09-patients-list | Patients grouped by status in order, a waiting call's reason and urgency on the card, a booked visit with the dentist, two records on one number flagged, the New filter, grouping by name, the grouping remembered |
+| 10-phone-line | With a bridge: calls arrive on their own with the token, are filed under the patient by number, a new caller gets a record, the note falls back to ElevenLabs' summary, the patient brief goes back without notes, phone calls are marked, Call dials `tel:`, a second check brings nothing twice, the token never reaches the page |
 | 06-ai-voice | With OpenAI: the greeting goes to OpenAI speech with Reva's instructions and the iPhone voice stays quiet; Settings shows the AI voice, model, instructions and OpenAI transcription; a silent call is closed, not queued |
+
+## The bridge
+
+`node bridge/test.mjs` (Node 22) runs the Cloudflare Worker against an in-memory KV: health without a token, everything else refused without it, the call-start lookup in Lithuanian for known and unknown numbers with every dynamic variable present, bad and replayed signatures refused, a signed webhook stored once even when retried and mapped to Frontly's shape, `since=`, and calls posted by other services.
 
 ## What the tests don't cover
 
-Real voices, real iPhone dictation, whether Scriptable's page may use the microphone, real speech levels for the pause detection, the Ring/Silent switch, how iOS draws the page and the widget, and real AI answers. Run the blueprints' phone checklists for those, in light and dark mode.
+Real phone calls through Twilio and ElevenLabs, real voices, real iPhone dictation, whether Scriptable's page may use the microphone, real speech levels for the pause detection, the Ring/Silent switch, how iOS draws the page and the widget, and real AI answers. Run the blueprints' phone checklists for those, in light and dark mode.

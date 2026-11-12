@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.0.2';
+const VERSION = '1.1.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -30,6 +30,24 @@ const UPDATE_SNOOZE_MS = 2 * 24 * 3600 * 1000;   // "Later" = 2 days
 const KC_UPDATE_SNOOZE = 'frontly-update-snooze';   // Keychain key, unique per app
 // In a native shell (BuildIt) new versions come from the App Store or TestFlight, never from GitHub (Step 8).
 const NATIVE_SHELL = (() => { try { return config.runsInNativeShell === true; } catch (e) { return false; } })();
+
+// Other secrets (settings blueprint, Step 7): each its own Keychain entry, typed into a native secure prompt, never in settings.json or the page.
+const SECRETS = { bridge: { key: "FRONTLY_BRIDGE_TOKEN", name: "Phone line token", hint: "The APP_TOKEN secret of your Frontly bridge on Cloudflare." } };
+const secretFor = id => Keychain.contains(SECRETS[id].key) ? Keychain.get(SECRETS[id].key) : null;
+async function askSecret(id) {
+  const d = SECRETS[id], cur = secretFor(id);
+  const al = new Alert();
+  al.title = d.name;
+  al.message = (cur ? `The saved token ends in …${cur.slice(-4)}. Paste a new one to replace it. ` : "") + d.hint + " Stored in the iOS Keychain on this device only.";
+  al.addSecureTextField("Token", "");
+  al.addAction("Save token");
+  al.addCancelAction("Cancel");
+  if (await al.present() !== 0) return false;
+  const v = al.textFieldValue(0).trim();
+  if (!v) return false;
+  Keychain.set(d.key, v);
+  return true;
+}
 
 // ───────── Blueprints ─────────
 // Shared blueprints this app was built with. One line per blueprint, in this exact shape:
@@ -225,6 +243,7 @@ const settings = Object.assign(
     lang: "en", sttEngine: "dictation", speechEngine: "ai", handsFree: true,   // the call: language, how Reva hears and speaks
     ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsInstructions: "", voiceURI: "",
     deskUser: "", tab: "call", callFrom: "", patGroup: "status",
+    bridgeUrl: "", lineSince: 0, linePhone: "", lineLast: null,   // the real phone line (bridge/), when set up
     theme: "auto", density: "comfortable", font: "sans", textSize: 1 },
   await load("settings", {})
 );
@@ -538,7 +557,7 @@ const SCRIPT = {
   },
   lt: {
     hello: (c, a) => `Labas, skambinate į ${c}, aš ${a}. Gal galite pasakyti savo vardą ir pavardę?`,
-    helloKnown: (c, a, n) => `Labas, skambinate į ${c}, aš ${a}. Ar kalbu su ${n}?`,
+    helloKnown: (c, a, n) => `Labas, skambinate į ${c}, aš ${a}. Ar tai ${n}?`,
     known: n => `Labas, ${n}, malonu vėl jus girdėti. Kuo galime padėti šiandien?`,
     who: "Žinoma. Gal galite pasakyti savo vardą ir pavardę?",
     age: n => `Ačiū${n ? ", " + n : ""}. O kiek jums metų?`,
@@ -771,6 +790,99 @@ async function finishCall(id) {
   return c;
 }
 
+// ---------- the real phone line: calls ElevenLabs answered, collected from the Frontly bridge (bridge/worker.js) ----------
+const lineUrl = () => String(settings.bridgeUrl || "").trim().replace(/\/+$/, "");
+const lineOn = () => /^https:\/\/./.test(lineUrl()) && !!secretFor("bridge");
+async function lineReq(method, path, body) {
+  const r = new Request(lineUrl() + path);
+  r.method = method; r.timeoutInterval = 12;
+  r.headers = { "Authorization": "Bearer " + secretFor("bridge"), "Content-Type": "application/json" };
+  if (body !== undefined) r.body = JSON.stringify(body);
+  let j = null;
+  try { j = await r.loadJSON(); } catch (e) { throw new Error("The bridge didn't answer: " + String(e.message || e).slice(0, 80)); }
+  const code = (r.response && r.response.statusCode) || 0;
+  if (code === 401) throw new Error("The bridge refused the token. Check that it matches APP_TOKEN.");
+  if (code !== 200) throw new Error((j && j.error) || "The bridge answered HTTP " + code);
+  return j || {};
+}
+// What Reva may know when a patient phones: name, age, the last visit. Pushed to the bridge after each check.
+function patientsBrief() {
+  return patients.filter(p => p.phone).map(p => {
+    const last = (p.appts || []).filter(a => a.status === "done").sort((a, b) => b.at - a.at)[0];
+    const next = (p.appts || []).filter(a => a.status === "booked" && a.at > Date.now()).sort((a, b) => a.at - b.at)[0];
+    const d = x => new Date(x.at).toISOString().slice(0, 10);
+    const history = [last ? `Last visit ${d(last)}: ${last.reason}` : "", next ? `Booked ${d(next)}: ${next.reason}` : ""].filter(Boolean).join(". ");
+    return { name: p.name, age: p.age || null, phone: p.phone, history };
+  });
+}
+// One call from the bridge → a call at the front desk, filed under the caller's record, with Frontly's own note.
+async function importPhoneCall(r) {
+  if (!r || !r.id || calls.some(c => c.id === r.id)) return null;
+  const c = {
+    id: r.id, at: Number(r.at) || Date.now(), dur: Number(r.dur) || 0, phone: String(r.phone || "Unknown number"), source: "phone", engine: "phone",
+    provider: String(r.provider || "phone"), lang: String(r.lang || ""), status: "waiting", deskNotes: [],
+    transcript: (r.transcript || []).map(x => ({ who: x.who === "reva" ? "reva" : "caller", t: String(x.t || "").slice(0, 2000) })).filter(x => x.t),
+    fields: { name: null, age: null, complaint: null, location: null, pain: null, urgency: null, preferred: null, notes: null },
+    mood: cleanMood(r.mood),
+  };
+  c.end = c.at + c.dur * 1000;
+  mergeFields(c, r.fields);
+  let pt = patientByPhone(c.phone);
+  if (pt && c.fields.name && firstName(c.fields.name).toLowerCase() !== firstName(pt.name).toLowerCase()) pt = null;   // someone else on that number
+  if (!pt && c.fields.name) { pt = { id: "p-" + Date.now().toString(36) + Math.floor(Math.random() * 1e3), name: c.fields.name, age: c.fields.age || null, phone: c.phone, since: Date.now(), notes: [], appts: [] }; patients.push(pt); c.isNew = true; }
+  else c.isNew = false;
+  c.patientId = pt ? pt.id : null;
+  if (pt && !c.fields.name) c.fields.name = pt.name;
+  let summary = null;
+  if (settings.ai && aiKey() && c.transcript.length) {
+    try { summary = await aiSummary(Object.assign({}, c, { provider: settings.aiProvider })); }
+    catch (e) { startLog("phone line: AI note failed: " + String(e.message || e).slice(0, 100)); }
+  }
+  if (!summary) { summary = templateSummary(c); if (r.summary) { summary.text = String(r.summary).slice(0, 700); summary.kind = "ai"; summary.provider = c.provider; } }
+  if (summary.mood && !c.mood) c.mood = summary.mood;
+  delete summary.mood;
+  c.summary = summary;
+  if (!c.transcript.some(x => x.who === "caller")) c.status = "closed";   // nobody spoke
+  calls.unshift(c);
+  if (calls.length > 300) calls.length = 300;
+  return c;
+}
+let lineBusy = false;
+async function syncLine(manual) {
+  if (!lineOn() || lineBusy || !dataLoaded) { if (manual && !lineOn()) toast("Set up the phone line in Settings first"); return; }
+  lineBusy = true; call("onLine", true);
+  let added = [];
+  try {
+    const j = await lineReq("GET", "/calls?since=" + (Number(settings.lineSince) || 0));
+    if (j.phone) settings.linePhone = String(j.phone);
+    for (const r of j.calls || []) {
+      const c = await importPhoneCall(r);
+      if (c) added.push(c);
+      settings.lineSince = Math.max(Number(settings.lineSince) || 0, Number(r.at) || 0);
+    }
+    await lineReq("PUT", "/patients", patientsBrief());
+    settings.lineLast = { at: Date.now(), ok: true, n: added.length };
+  } catch (e) {
+    settings.lineLast = { at: Date.now(), ok: false, msg: String(e.message || e).slice(0, 140) };
+    startLog("phone line: " + settings.lineLast.msg);
+    if (manual) toast(settings.lineLast.msg);
+  }
+  lineBusy = false;
+  saveAll();
+  if (added.length) { saveWidget(widgetSnapshot()); toast(added.length === 1 ? `New call from the phone line: ${added[0].fields.name || added[0].phone}` : `${added.length} new calls from the phone line`); }
+  else if (manual && settings.lineLast.ok) toast("No new calls on the phone line");
+  push(); call("onLine", false);
+}
+// Reva's instructions for the ElevenLabs agent, with the variables the bridge fills in when a call starts.
+const PHONE_PROMPT = () => `You are ${cfg("assistantName")}, the virtual receptionist of ${cfg("clinicName")}, a dental clinic in Vilnius, Lithuania. You answer real phone calls.
+Speak the caller's language: Lithuanian or English. Keep every reply short: one or two spoken sentences, one question at a time.
+Collect for the front desk: the caller's full name, their age, the reason for the call, where it hurts (which tooth or side), the pain from 0 to 10, how urgent it feels to the caller from 1 (it can wait) to 5 (needs help today), the best time for a visit, and anything else that matters (swelling, fever, bleeding, medicines, allergies, pregnancy, a child as the patient).
+Known patient: {{patient_known}}. Name: {{patient_name}}. Age: {{patient_age}}. History: {{patient_history}}.
+If the patient is known, confirm it's them by first name, don't ask for their name or age again, and use their history when it helps.
+Be warm and empathetic and acknowledge pain, but stay brief. Never diagnose, never give treatment advice and never promise an exact appointment time: the front desk will call back to confirm.
+If the caller mentions trouble breathing or swallowing, swelling spreading towards the eye or neck, bleeding that won't stop or a serious injury, tell them to call 112 or go to the emergency room now, then end the call.
+When you have everything, or the caller wants to stop, say a short goodbye that says the front desk will call back, and end the call.`;
+
 // ---------- front desk ----------
 function bookCall(m) {
   const c = calls.find(x => x.id === m.id), doc = docById(m.doctor), at = Number(m.at);
@@ -827,6 +939,8 @@ function clientState() {
     },
     ttsModels: settings.ttsModels || null, palettes: PALETTES, version: VERSION, nativeShell: NATIVE_SHELL,
     blueprints: BLUEPRINTS, blueprintAbout: BLUEPRINT_ABOUT, appName: APP, now: Date.now(),
+    secrets: Object.fromEntries(Object.keys(SECRETS).map(id => [id, { name: SECRETS[id].name, last4: (secretFor(id) || "").slice(-4) || null }])),
+    line: { url: lineUrl(), on: lineOn(), phone: settings.linePhone || "", last: settings.lineLast || null, busy: lineBusy },
   };
 }
 
@@ -909,6 +1023,16 @@ async function handle(m) {
     case "note": if (addNote(m)) { saveAll(); toast("Note added"); return push(); } return;
     case "appt-cancel": cancelAppt(m); saveWidget(widgetSnapshot()); saveAll(); toast("Appointment cancelled"); return push();
     case "copy": if (m.text) { Pasteboard.copy(String(m.text)); toast("Copied"); } return;
+    case "line-sync": return syncLine(true);
+    case "line-call": if (settings.linePhone) Safari.open("tel:" + digits(settings.linePhone).replace(/^/, "+")); return;
+    case "line-prompt": Pasteboard.copy(PHONE_PROMPT()); toast("Reva's instructions copied: paste them into the ElevenLabs agent's system prompt"); return;
+    case "line-token-new": {   // a fresh random token: kept in the Keychain and copied once, to paste into Cloudflare as APP_TOKEN
+      const t = (UUID.string() + UUID.string()).replace(/-/g, "").toLowerCase();
+      Keychain.set(SECRETS.bridge.key, t); Pasteboard.copy(t);
+      toast("New token copied: paste it into Cloudflare as the APP_TOKEN secret"); return push();
+    }
+    case "secret-set": if (SECRETS[m.v] && await askSecret(m.v)) toast(`${SECRETS[m.v].name} saved`); return push();
+    case "secret-remove": if (SECRETS[m.v] && Keychain.contains(SECRETS[m.v].key)) { Keychain.remove(SECRETS[m.v].key); toast(`${SECRETS[m.v].name} removed`); } return push();
     case "demo-reset": {
       const d = demoData(); patients = d.patients; calls = d.calls;
       if (dataLoaded) { saveAll(); saveWidget(widgetSnapshot()); toast("The demo starts again: 3 patients, 1 call waiting"); }
@@ -917,6 +1041,7 @@ async function handle(m) {
     // ── shared: settings, AI, updates ──
     case "set":
       if (["theme", "density", "font", "textSize", "checkUpdates", "ai", "lang", "sttEngine", "speechEngine", "handsFree", "ttsVoice", "ttsModel", "ttsInstructions", "voiceURI", "tab", "callFrom", "patGroup"].includes(m.k)) settings[m.k] = m.v;
+      if (m.k === "bridgeUrl") { const v = String(m.v || "").trim().replace(/\/+$/, ""); if (v !== settings.bridgeUrl) { settings.bridgeUrl = v; settings.lineSince = 0; settings.lineLast = null; settings.linePhone = ""; } saveAll(); push(); if (lineOn()) syncLine(true); return; }
       break;
     case "state": return push();
     case "update-later": pendingUpdate = null; snoozeUpdate(); return;   // asked again in 2 days
@@ -1096,6 +1221,7 @@ function clientApp() {
         <button class="sm ${st.hasKey ? "" : "primary"}" data-act="aiopen">AI settings</button></div>
       <h3 class="sec">Front desk</h3>
       <div class="srow"><div class="grow"><b>${st.deskUser ? "Signed in as " + esc(st.deskUser) : "Not signed in"}</b><small class="muted wrap">The receptionist's view of the calls Reva took</small></div>${st.deskUser ? `<button class="sm" data-act="signout">Sign out</button>` : `<button class="sm" data-act="gotab" data-v="desk">Sign in</button>`}</div>
+      <h3 class="sec">Phone line</h3>${lineHTML()}
       <h3 class="sec">Demo</h3>
       <div class="srow"><div class="grow"><b>Start the demo again</b><small class="muted wrap">Puts back the three demo patients and the one waiting call. Every call and booking made since is removed.</small></div><button class="sm danger ${demoArmed ? "armed" : ""}" data-act="demoreset">${demoArmed ? "Confirm" : "Start again"}</button></div>
       <h3 class="sec">Updates</h3>
@@ -1113,8 +1239,22 @@ function clientApp() {
     cardSections(el.querySelector(".sh-body"));
     el.scrollTop = keepTop;
   }
+  let secArmed = null;
+  function lineHTML() {
+    const L = S.line || {}, tok = ((S.secrets || {}).bridge || {}).last4, last = L.last;
+    const status = !L.url ? "Not set up. Calls to a real number need the Frontly bridge: see bridge/README.md in the repository."
+      : !tok ? "Add the token next, so Frontly can collect calls."
+      : !last ? "Not checked yet."
+      : last.ok ? `Checked ${rel(last.at)}${L.phone ? " · callers dial " + L.phone : ""}` : "Last check failed: " + last.msg;
+    return `<div class="srow col"><b>Bridge address</b><small class="muted wrap">Your Cloudflare Worker, for example https://frontly-bridge.you.workers.dev</small>
+        <input class="cfgin wide linein" type="url" value="${esc(L.url || "")}" placeholder="https://…workers.dev" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Bridge address"></div>
+      <div class="srow"><div class="grow"><b>Token</b><small class="muted wrap">${tok ? "Saved, ending …" + esc(tok) : "Not set"}. The bridge's APP_TOKEN, kept in the Keychain.</small></div>
+        <button class="sm" data-act="secret-set" data-v="bridge">${tok ? "Change" : "Add"}</button>${tok ? `<button class="sm danger ${secArmed === "bridge" ? "armed" : ""}" data-act="secret-remove" data-v="bridge">${secArmed === "bridge" ? "Confirm" : "Remove"}</button>` : `<button class="sm" data-act="line-token-new">Make one</button>`}</div>
+      <div class="srow"><div class="grow"><b>Status</b><small id="linemsg" class="muted wrap ${last && !last.ok ? "err" : ""}">${esc(status)}</small></div>${L.on ? `<button class="sm" data-act="line-sync">${L.busy ? "Checking…" : "Check now"}</button>` : ""}</div>
+      <div class="srow"><div class="grow"><b>Reva's instructions</b><small class="muted wrap">The system prompt for the ElevenLabs agent that answers the real number, with the patient details the bridge fills in</small></div><button class="sm" data-act="line-prompt">Copy</button></div>`;
+  }
   let aiOpen = false, aiArmed = null; const aiLoading = new Set();
-  const PN = { anthropic: "Claude", openai: "OpenAI" };
+  const PN = { anthropic: "Claude", openai: "OpenAI", elevenlabs: "ElevenLabs" };
   const FEAT = { call: "Conversation", summary: "Call notes", speech: "Reva's voice", listening: "Transcription", test: "Connection tests", other: "Other" };
   const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
   function arm(key) { aiArmed = key; renderAI(); setTimeout(() => { if (aiArmed === key) { aiArmed = null; renderAI(); } }, 3500); }
@@ -1299,6 +1439,7 @@ function clientApp() {
       }
     });
   }
+  window.onLine = busy => { if (S.line) S.line.busy = !!busy; if (cfgOpen) renderCfg(); if (!K.on && !caseId && !patId && (tab === "call" || tab === "desk")) render(); };
   window.toast = msg => {
     const t = $("#toast"); t.textContent = msg; t.classList.add("on");
     clearTimeout(window.__tt); window.__tt = setTimeout(() => t.classList.remove("on"), 3200);
@@ -1676,6 +1817,9 @@ function clientApp() {
       <p class="note">Voice: ${voice} · Listening: ${ears} · ${st.lang === "lt" ? "Lietuvių" : "English"} <button class="link inline" data-act="cfgopen">Change</button></p>
       <button class="callgo" data-act="callgo">${PHONE_SVG}<span>Call ${esc(S.clinic)}</span></button>
     </section>
+    ${S.line && S.line.on && S.line.phone ? `<section class="block"><div class="realline">
+      <div class="grow"><b>Or call the real line</b><span>${esc(S.line.phone)}</span><small class="muted wrap">From any phone: ${esc(S.assistant)} answers for real, and the call appears at the front desk a few seconds after you hang up.</small></div>
+      <div class="rl-btns"><button class="primary sm" data-act="line-call">${PHONE_SVG}Call</button><button class="link small" data-act="line-sync">${S.line.busy ? "Checking…" : "Check for calls"}</button></div></div></section>` : ""}
     ${recent.length ? `<section class="block"><div class="block-h"><h3>Recent calls</h3><button class="link small" data-act="tab" data-v="desk">Front desk</button></div>
       ${recent.map(c => `<button class="crow" data-act="opencase" data-id="${esc(c.id)}"><span class="stripe tri-${esc((c.summary || {}).triage || "routine")}"></span><span class="grow"><b>${esc(callName(c))}</b><small>${esc((c.summary || {}).reason || "Call")} · ${esc(whenFull(c.at))}</small></span>${statusPill(c)}</button>`).join("")}</section>` : ""}`;
   }
@@ -1699,7 +1843,7 @@ function clientApp() {
     const list = sets[deskFilter] || sets.waiting;
     if (deskFilter === "waiting") list.sort((a, b) => ((b.summary || {}).priority || 0) - ((a.summary || {}).priority || 0) || a.at - b.at);
     const today = S.patients.reduce((n, p) => n + (p.appts || []).filter(a => a.status === "booked" && a.made && sod(a.made) === sod(Date.now())).length, 0);
-    return `<div class="deskbar"><span>Signed in as <b>${esc(st.deskUser)}</b>${today ? ` · booked today: ${today}` : ""}</span><button class="link small" data-act="signout">Sign out</button></div>
+    return `<div class="deskbar"><span>Signed in as <b>${esc(st.deskUser)}</b>${today ? ` · booked today: ${today}` : ""}</span><span class="db-acts">${S.line && S.line.on ? `<button class="link small" data-act="line-sync">${S.line.busy ? "Checking…" : "📞 Check line"}</button>` : ""}<button class="link small" data-act="signout">Sign out</button></span></div>
       <div class="segbar"><div class="seg wide">${[["waiting", "To book"], ["booked", "Booked"], ["closed", "Closed"], ["all", "All"]].map(([v, l]) => `<button class="${deskFilter === v ? "on" : ""}" data-act="dfilter" data-v="${v}">${l} <i>${sets[v].length}</i></button>`).join("")}</div></div>
       ${list.length ? `<div class="queue">${list.map(queueCard).join("")}</div>` : `<div class="empty"><h2>${deskFilter === "waiting" ? "Nobody is waiting" : "Nothing here yet"}</h2><p>${deskFilter === "waiting" ? `When someone calls, ${esc(S.assistant)}'s note lands here. Try it yourself on the Call tab.` : "Calls show up here as you work through them."}</p>${deskFilter === "waiting" ? `<button class="primary" data-act="tab" data-v="call">Make a call</button>` : ""}</div>`}`;
   }
@@ -1707,7 +1851,7 @@ function clientApp() {
     const s = c.summary || {}, f = c.fields || {}, bk = c.booking;
     return `<button class="qcard" data-act="opencase" data-id="${esc(c.id)}">
       <span class="stripe tri-${esc(s.triage || "routine")}"></span>
-      <span class="q-top">${triagePill(s.triage)}${c.isNew ? `<span class="pill">New patient</span>` : ""}<span class="q-when">${esc(rel(c.at))}</span></span>
+      <span class="q-top">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Phone</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}<span class="q-when">${esc(rel(c.at))}</span></span>
       <b class="q-name">${esc(callName(c))}${f.age ? `<small>, ${esc(f.age)}</small>` : ""}</b>
       <span class="q-why">${esc(s.reason || f.complaint || "No reason given")}</span>
       <span class="chips">${f.pain != null ? `<span class="pill">Pain ${esc(f.pain)}/10</span>` : ""}${f.urgency != null ? `<span class="pill">Urgency ${esc(f.urgency)}/5</span>` : ""}${c.mood ? `<span class="pill">${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}</span>` : ""}${f.preferred ? `<span class="pill soft">${esc(String(f.preferred).slice(0, 34))}</span>` : ""}</span>
@@ -1795,14 +1939,14 @@ function clientApp() {
     el.innerHTML = `<div class="sh-head"><h2>${esc(callName(c))}</h2><button class="link" data-act="caseclosesheet">Done</button></div><div class="sh-body">
       <div class="sumbox">${s.kind === "ai" ? `<span class="badge-ai">✦ AI note by ${PN[s.provider] || "AI"}</span>` : `<span class="badge-ex">Note · no AI</span>`}
         <p class="sum-t">${esc(s.text || "")}</p>
-        <div class="chips">${triagePill(s.triage)}${s.priority ? `<span class="pill">Priority ${esc(s.priority)}/5</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}</div>
+        <div class="chips">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Real phone call</span>` : ""}${s.priority ? `<span class="pill">Priority ${esc(s.priority)}/5</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}</div>
         ${(s.flags || []).length ? `<div class="chips">${s.flags.map(x => `<span class="pill flag">⚠ ${esc(x)}</span>`).join("")}</div>` : ""}
       </div>
       <h3 class="sec2">Booking</h3>${bookingHTML(c)}
       <h3 class="sec2">What ${esc(S.assistant)} learned</h3>
       <dl class="facts">${[["Phone", c.phone], ...FIELD_ROWS.map(([k, l]) => [l, k === "pain" && f[k] != null ? f[k] + "/10" : k === "urgency" && f[k] != null ? f[k] + "/5 (the caller's own rating)" : f[k]])].filter(x => x[1] != null && x[1] !== "").map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join("")}
         ${c.mood ? `<div><dt>Mood</dt><dd>${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}${c.mood.note ? " · " + esc(c.mood.note) : ""} <em class="tag ai">✦ AI</em></dd></div>` : ""}
-        <div><dt>Call</dt><dd>${esc(whenFull(c.at))} · ${mmss(c.dur || 0)}${c.engine === "ai" ? ` · ✦ AI by ${PN[c.provider] || "AI"}` : " · script, no AI"}</dd></div></dl>
+        <div><dt>Call</dt><dd>${esc(whenFull(c.at))} · ${mmss(c.dur || 0)}${c.source === "phone" ? ` · phone line, answered by ${PN[c.provider] || "the voice agent"}` : c.engine === "ai" ? ` · ✦ AI by ${PN[c.provider] || "AI"}` : " · script, no AI"}</dd></div></dl>
       <button class="link small" data-act="txtoggle">${showTx ? "Hide the call" : "Read the whole call"}</button>
       ${showTx ? `<div class="c-log flat">${(c.transcript || []).map(l => `<p class="bub ${l.who}">${esc(l.t)}</p>`).join("")}</div>` : ""}
       <h3 class="sec2">Patient</h3>
@@ -1844,6 +1988,7 @@ function clientApp() {
       : `<span class="muted">No calls yet</span>`;
     const chips = [
       x.isNew ? `<span class="pill">New patient</span>` : "",
+      x.last && x.last.source === "phone" ? `<span class="pill line">📞 Phone</span>` : "",
       x.visits ? `<span class="pill soft">${x.visits} visit${x.visits === 1 ? "" : "s"}</span>` : "",
       x.calls.length ? `<span class="pill soft">${x.calls.length} call${x.calls.length === 1 ? "" : "s"}</span>` : "",
       (p.notes || []).length ? `<span class="pill soft">${p.notes.length} note${p.notes.length === 1 ? "" : "s"}</span>` : "",
@@ -2004,6 +2149,15 @@ function clientApp() {
       case "openpat": patId = id; patArmed = ""; renderPat(); $("#patsheet").scrollTop = 0; break;
       case "patclose": patId = ""; renderPat(); break;
       case "pfilter": patFilter = v; render(); break;
+      case "line-sync": if (!(S.line && S.line.busy)) send("line-sync", {}); break;
+      case "line-call": send("line-call", {}); break;
+      case "line-prompt": send("line-prompt", {}); break;
+      case "line-token-new": send("line-token-new", {}); break;
+      case "secret-set": send("secret-set", { v }); break;
+      case "secret-remove":
+        if (secArmed === v) { secArmed = null; send("secret-remove", { v }); }
+        else { secArmed = v; renderCfg(); setTimeout(() => { if (secArmed === v) { secArmed = null; renderCfg(); } }, 3500); }
+        break;
       case "pgroup": S.settings.patGroup = v; send("set", { k: "patGroup", v }); render(); break;
       case "patnote": { const ta = $("#patnote"); if (ta && ta.value.trim()) { send("note", { patient: id, text: ta.value }); ta.value = ""; } break; }
       // settings
@@ -2073,6 +2227,7 @@ function clientApp() {
     if (c.contains("voicesel") && !c.contains("bkdoc") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
     if (c.contains("bkdoc")) { caseDoc = e.target.value; caseDay = 0; caseSlot = 0; renderCase(); return; }
     if (c.contains("modelsel")) send("aimodel", { p: e.target.dataset.p, v: e.target.value });
+    if (c.contains("linein")) { send("set", { k: "bridgeUrl", v: e.target.value }); return; }
     if (c.contains("cfgin") && e.target.dataset.k) {
       const d = cfgItem(e.target.dataset.k);
       send("cfg", { k: d.k, v: d.type === "lines" ? e.target.value.split("\n") : e.target.value });
@@ -2270,6 +2425,14 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .pcard.st-booked .av.ring{border-color:var(--signal);color:var(--signal)}
 .pcard.st-new .av.ring{border-style:dashed}
 .pill.warn{color:var(--amber);border-color:var(--amber);background:var(--amber-wash)}
+.pill.line{color:var(--signal);border-color:var(--signal);background:var(--sheet)}
+.realline{display:flex;align-items:center;gap:12px;background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:14px 16px}
+.realline .grow b{display:block;white-space:normal}
+.realline .grow span{display:block;font:700 calc(19px * var(--ts))/1.3 var(--rounded);font-variant-numeric:tabular-nums;margin:2px 0 4px}
+.rl-btns{display:flex;flex-direction:column;align-items:center;gap:8px;flex:none}
+.rl-btns .primary.sm{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;font-size:calc(14px * var(--ts))}
+.rl-btns svg{width:16px;height:16px;fill:currentColor}
+.db-acts{display:flex;gap:14px;align-items:center}
 
 /* ── Front desk ── */
 .desk-in .pin{width:100%;font:700 22px/1 var(--rounded);letter-spacing:.4em;text-align:center;padding:12px;border-radius:12px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink)}
@@ -2917,7 +3080,10 @@ async function bootApp(isClosed) {
     checkForUpdate().then(u => { pendingUpdate = u; offerUpdate(); }).catch(() => {}).then(inviteIfDue);   // AI invitation: after the update check, never with an offer
   });
   Timer.schedule(6000, false, () => { widgetIcon(); });
+  Timer.schedule(1500, false, () => { if (!isClosed()) syncLine(false); });   // calls the real line took while Frontly was closed
+  lineTimer = Timer.schedule(20000, true, () => { if (isClosed()) { lineTimer.invalidate(); return; } syncLine(false); });
 }
+let lineTimer = null;
 
 async function main() {
   await waitForOtherWindow();
@@ -2940,6 +3106,7 @@ async function main() {
   });
   await presented;
   closed = true;
+  if (lineTimer) lineTimer.invalidate();
   releaseLock();
   saveAll();                                 // skips data that was never read
   if (dataLoaded) saveWidget(widgetSnapshot());

@@ -1,0 +1,15 @@
+# Deploy with the Cloudflare CLI: npx wrangler deploy   (or paste worker.js in the dashboard: see README.md)
+name = "frontly-bridge"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+[[kv_namespaces]]
+binding = "FRONTLY"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"   # npx wrangler kv namespace create FRONTLY
+
+[vars]
+PHONE_NUMBER = "+370 5 000 0000"      # the Twilio number callers dial
+CLINIC_NAME = "Northlight Dental"
+ASSISTANT_NAME = "Reva"
+LANGUAGE = "lt"                        # Reva's opening line: lt or en
+# Secrets (npx wrangler secret put …): APP_TOKEN, EL_WEBHOOK_SECRET, INIT_TOKEN
