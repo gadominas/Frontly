@@ -2,6 +2,22 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.1.1 (2026-11-12): Notes that fit the screen
+
+- 📐 **Long warnings wrap**: A long warning or label in a call note now wraps onto the next line inside the card instead of running off the screen.
+- ↔️ **No sideways scrolling**: The case sheet and the app's pages stay exactly the width of the screen, so nothing can be dragged sideways by accident.
+- 📞 **Ready for real calls**: Notes written from real phone calls, which tend to carry longer warnings, now read cleanly at the front desk.
+
+**Changes**
+
+- Pills (urgency, priority, specialty, warnings) may wrap within the card's width; warnings keep the ⚠ at the top of a wrapped line
+- The page, its sheets and the note box no longer allow horizontal scrolling; very long words break inside the box
+- Tests: 10-phone-line checks the wrapping and no-sideways-scroll rules (16 of 16 with the testkit); node bridge/test.mjs still 11 checks
+
+**Fixes**
+
+- A long AI warning in a call note ran past the right edge and let the case sheet scroll sideways
+
 ## 1.1.0 (2026-11-12): A real phone number for Reva
 
 - 📞 **Call Reva for real**: Connect a Twilio number answered by an ElevenLabs agent: Reva picks up real calls, and the Call tab dials the number for you.

@@ -4,6 +4,36 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.1.1",
+      "date": "2026-11-12",
+      "title": "Notes that fit the screen",
+      "highlights": [
+        {
+          "icon": "📐",
+          "title": "Long warnings wrap",
+          "text": "A long warning or label in a call note now wraps onto the next line inside the card instead of running off the screen."
+        },
+        {
+          "icon": "↔️",
+          "title": "No sideways scrolling",
+          "text": "The case sheet and the app's pages stay exactly the width of the screen, so nothing can be dragged sideways by accident."
+        },
+        {
+          "icon": "📞",
+          "title": "Ready for real calls",
+          "text": "Notes written from real phone calls, which tend to carry longer warnings, now read cleanly at the front desk."
+        }
+      ],
+      "changes": [
+        "Pills (urgency, priority, specialty, warnings) may wrap within the card's width; warnings keep the ⚠ at the top of a wrapped line",
+        "The page, its sheets and the note box no longer allow horizontal scrolling; very long words break inside the box",
+        "Tests: 10-phone-line checks the wrapping and no-sideways-scroll rules (16 of 16 with the testkit); node bridge/test.mjs still 11 checks"
+      ],
+      "fixes": [
+        "A long AI warning in a call note ran past the right edge and let the case sheet scroll sideways"
+      ]
+    },
+    {
       "version": "1.1.0",
       "date": "2026-11-12",
       "title": "A real phone number for Reva",
