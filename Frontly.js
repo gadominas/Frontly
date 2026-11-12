@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.4.0';
+const VERSION = '1.4.1';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -2018,12 +2018,16 @@ function clientApp() {
     const list = sets[deskFilter] || sets.waiting;
     if (deskFilter === "waiting") list.sort((a, b) => ((b.summary || {}).priority || 0) - ((a.summary || {}).priority || 0) || a.at - b.at);
     const today = S.patients.reduce((n, p) => n + (p.appts || []).filter(a => a.status === "booked" && a.made && sod(a.made) === sod(Date.now())).length, 0);
-    return `<div class="deskbar"><span>Signed in as <b>${esc(st.deskUser)}</b>${today ? ` · booked today: ${today}` : ""}</span><span class="db-acts">${S.line && S.line.on ? `<button class="link small" data-act="line-sync">${S.line.busy ? "Checking…" : "📞 Check line"}</button>` : ""}<button class="link small" data-act="signout">Sign out</button></span></div>
+    return `<div class="deskbar"><span class="db-who"><span class="av db-av" aria-hidden="true">${esc(initials(st.deskUser))}</span><span class="db-t"><b>${esc(st.deskUser)}</b><small>${today ? `Booked today: ${today}` : "Front desk"}</small></span></span>
+      <span class="db-acts">${S.line && S.line.on ? `<button class="dbb accent ${S.line.busy ? "busy" : ""}" data-act="line-sync" ${S.line.busy ? "disabled" : ""} aria-label="Check the phone line for new calls">${S.line.busy ? SPIN_SVG : LINE_SVG}<span>${S.line.busy ? "Checking" : "Check line"}</span></button>` : ""}<button class="dbb icon-only" data-act="signout" aria-label="Sign out" title="Sign out">${SIGNOUT_SVG}</button></span></div>
       <div class="segbar"><div class="seg wide">${[["waiting", "To book"], ["booked", "Booked"], ["closed", "Other"], ["all", "All"]].map(([v, l]) => `<button class="${deskFilter === v ? "on" : ""}" data-act="dfilter" data-v="${v}">${l} <i>${sets[v].length}</i></button>`).join("")}</div></div>
       ${list.length ? `<div class="queue">${groupByPatient(list).map(g => g.length === 1 ? queueCard(g[0]) : groupCard(g)).join("")}</div>` : `<div class="empty"><h2>${deskFilter === "waiting" ? "Nobody is waiting" : "Nothing here yet"}</h2><p>${deskFilter === "waiting" ? `When someone calls, ${esc(S.assistant)}'s note lands here. Try it yourself on the Call tab.` : "Calls show up here as you work through them."}</p>${deskFilter === "waiting" ? `<button class="primary" data-act="tab" data-v="call">Make a call</button>` : ""}</div>`}`;
   }
   // A patient with several calls in the same list gets one card, the calls inside it, most urgent first
   const TRI_ORDER = ["emergency", "urgent", "soon", "routine"];
+  const LINE_SVG = `<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M6.6 3.5l2.6 2.6a1.5 1.5 0 0 1 0 2.1L7.9 9.5a12 12 0 0 0 6.6 6.6l1.3-1.3a1.5 1.5 0 0 1 2.1 0l2.6 2.6a1.5 1.5 0 0 1 0 2.1l-1.4 1.4c-1 1-2.6 1.3-3.9.7A20 20 0 0 1 3.2 9.3c-.6-1.3-.3-2.9.7-3.9l1.4-1.4a1 1 0 0 1 1.3-.5z" fill="currentColor"/></svg>`;
+  const SPIN_SVG = `<svg class="spin" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>`;
+  const SIGNOUT_SVG = `<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M14 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   function groupByPatient(list) {
     const out = [], at = {};
     list.forEach(c => { const k = c.patientId || "c:" + c.id; if (at[k]) at[k].push(c); else out.push(at[k] = [c]); });
@@ -2888,11 +2892,24 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .rl-btns{display:flex;flex-direction:column;align-items:center;gap:8px;flex:none}
 .rl-btns .primary.sm{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;font-size:calc(14px * var(--ts))}
 .rl-btns svg{width:16px;height:16px;fill:currentColor}
-.db-acts{display:flex;gap:14px;align-items:center}
+.db-acts{display:flex;gap:8px;align-items:center;flex:none}
+.db-who{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.db-av{width:36px;height:36px;font-size:calc(13px * var(--ts));flex:none}
+.db-t{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.db-t b{color:var(--ink);font-size:calc(15px * var(--ts));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.db-t small{color:var(--muted);font-size:calc(13px * var(--ts));white-space:nowrap}
+.dbb{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:38px;padding:0 14px;border-radius:999px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);font:inherit;font-weight:650;font-size:calc(14px * var(--ts));white-space:nowrap;-webkit-tap-highlight-color:transparent;touch-action:manipulation;transition:transform .12s ease,background .12s ease}
+.dbb svg{flex:none;display:block}
+.dbb:active{transform:scale(.95)}
+.dbb.accent{background:var(--signal-wash);border-color:transparent;color:var(--signal)}
+.dbb.icon-only{width:38px;padding:0;color:var(--ink-2)}
+.dbb[disabled]{opacity:.75}
+.spin{animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 /* ── Front desk ── */
 .desk-in .pin{width:100%;font:700 22px/1 var(--rounded);letter-spacing:.4em;text-align:center;padding:12px;border-radius:12px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink)}
-.deskbar{display:flex;justify-content:space-between;align-items:center;gap:10px;max-width:680px;margin:0 auto;padding:12px 18px 0;color:var(--ink-2);font-size:calc(13.5px * var(--ts))}
+.deskbar{display:flex;justify-content:space-between;align-items:center;gap:12px;max-width:680px;margin:0 auto;padding:12px 18px 2px;color:var(--ink-2);font-size:calc(13.5px * var(--ts))}
 .segbar{max-width:680px;margin:0 auto;padding:10px 18px 4px}
 .queue{max-width:680px;margin:0 auto;padding:8px 14px 0;display:flex;flex-direction:column;gap:var(--gap)}
 .qcard{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;text-align:left;background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:var(--pad) 16px var(--pad) 22px;overflow:hidden}

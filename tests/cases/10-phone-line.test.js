@@ -64,6 +64,12 @@ scenario('phone line', async (t) => {
 
   t.step('D. Checking again brings nothing twice, and the token stays out of the page');
   const before = seen.gets.length;
+  app.tap('[data-act="tab"][data-v="desk"]');
+  await app.until(() => app.$('.deskbar .dbb[data-act="line-sync"]'), 2000, 'the front desk bar');
+  const chk = app.$('.deskbar [data-act="line-sync"]'), out = app.$('.deskbar [data-act="signout"]');
+  t.check(/Check line/.test(chk.textContent) && chk.querySelector('svg') && chk.getAttribute('aria-label') && out.getAttribute('aria-label') === 'Sign out' && out.querySelector('svg'), 'the front desk bar has real buttons: Check line with its icon, and Sign out');
+  app.tap('[data-act="tab"][data-v="call"]');
+  await app.until(() => app.$('.realline'), 2000, 'the Call tab');
   app.tap('.realline [data-act="line-sync"]');
   await app.until(() => seen.gets.length > before, 3000, 'a second check');
   t.check(/since=\d{13}/.test(seen.gets[seen.gets.length - 1]), 'the second check asks only for newer calls');
