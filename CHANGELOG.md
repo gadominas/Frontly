@@ -2,6 +2,26 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.2.0 (2026-11-12): Returning callers, handled
+
+- 📅 **"When is my visit?"**: Reva knows each patient's booked visits and answers when, what time and with which dentist, without adding anything to the front desk's list.
+- 🧹 **Only real booking work waits**: Questions go to Other, filed under the patient. A patient who calls again about a request that's waiting is added to it ("Called 2×") instead of queueing twice.
+- ✉️ **Messages for the patient**: Write a message on the patient's page; Reva passes it on at their next call and Frontly marks it as passed on.
+
+**Changes**
+
+- Each phone call has a purpose: new visit, question about a booked visit, change to a booked visit, or other; from the agent's new intent field, Frontly's AI note, or the call itself
+- Front desk: Closed becomes Other (closed calls and calls that needed no booking); cards show the purpose and how many times someone called; a filed call can be moved to To book
+- Patient page: a message for the patient, its history once passed on, and each call's purpose
+- The patient brief for the bridge adds booked visits, a waiting request and the message; Reva's instructions (Settings › Phone line › Copy) use them
+- bridge: new variables patient_appointments, patient_waiting, patient_message, patient_message_id; reads the intent and message_passed fields
+- Tests: 11-returning-caller (17 of 17 with the testkit); node bridge/test.mjs 14 checks
+
+**Fixes**
+
+- Short labels on the front-desk cards broke onto two lines; they now stay whole and move to the next row, and only long warnings wrap
+- A patient who phoned twice about the same thing showed up twice in To book
+
 ## 1.1.2 (2026-11-12): The caller's language from the first word
 
 - 🌍 **Language by phone number**: A +370 number hears Reva in Lithuanian, a +371 number in Latvian and any other country in English, from her very first word.
