@@ -2,6 +2,21 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.0.2 (2026-11-12): Patients, organised
+
+- 🗂️ **Grouped by what needs doing**: Patients sort into To book, Visit booked, New and everyone else, or by last contact or name.
+- 🔎 **Filters and search**: Show only callers to book, booked visits or new patients, with a count on each, and search by name or number.
+- 🪪 **More on every card**: The next visit with its dentist or the open call with its urgency, plus visits, calls, notes, mood, and a warning when two records share a number.
+
+**Changes**
+
+- The Patients tab is rebuilt: grouping (remembered as settings.patGroup), filters with counts, full-width cards with status rings
+- Tests: 09-patients-list: 15 of 15
+
+**Fixes**
+
+- Patient rows shrank to their text and sat centred at different widths
+
 ## 1.0.1 (2026-11-12): Lithuanian calls, hands free
 
 - 🇱🇹 **Lithuanian works**: iPhone dictation has no Lithuanian, so Reva now hears you through OpenAI transcription, or asks you to type when there's no OpenAI key.

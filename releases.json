@@ -4,6 +4,35 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.0.2",
+      "date": "2026-11-12",
+      "title": "Patients, organised",
+      "highlights": [
+        {
+          "icon": "🗂️",
+          "title": "Grouped by what needs doing",
+          "text": "Patients sort into To book, Visit booked, New and everyone else, or by last contact or name."
+        },
+        {
+          "icon": "🔎",
+          "title": "Filters and search",
+          "text": "Show only callers to book, booked visits or new patients, with a count on each, and search by name or number."
+        },
+        {
+          "icon": "🪪",
+          "title": "More on every card",
+          "text": "The next visit with its dentist or the open call with its urgency, plus visits, calls, notes, mood, and a warning when two records share a number."
+        }
+      ],
+      "changes": [
+        "The Patients tab is rebuilt: grouping (remembered as settings.patGroup), filters with counts, full-width cards with status rings",
+        "Tests: 09-patients-list: 15 of 15"
+      ],
+      "fixes": [
+        "Patient rows shrank to their text and sat centred at different widths"
+      ]
+    },
+    {
       "version": "1.0.1",
       "date": "2026-11-12",
       "title": "Lithuanian calls, hands free",
