@@ -2,6 +2,24 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.0.1 (2026-11-12): Lithuanian calls, hands free
+
+- 🇱🇹 **Lithuanian works**: iPhone dictation has no Lithuanian, so Reva now hears you through OpenAI transcription, or asks you to type when there's no OpenAI key.
+- 🎙️ **Just stop talking**: With OpenAI transcription, Reva stops listening on her own when you pause and sends your answer. No tap needed.
+- 👀 **Easier to read**: The receptionist's name under the clinic on the call screen is readable in every colour scheme.
+
+**Changes**
+
+- When iPhone dictation says a language isn't supported, Frontly remembers it (settings.noDictation) and uses OpenAI transcription for that language, or the keyboard without an OpenAI key; Settings › Calls and the Call tab say so
+- OpenAI transcription ends each answer by itself after a pause (Settings › Calls › Stop listening after a pause of, 1.2 s), after 10 s of silence, or after 45 s
+- Tests: 07-no-dictation and 08-transcribe-hands-free (a fake microphone) join the testkit run: 14 of 14
+
+**Fixes**
+
+- A Lithuanian call showed iOS's raw "Dictation is not supported for the locale lt-LT" and stopped listening
+- An answer transcribed by OpenAI was dropped instead of reaching Reva
+- The line under the clinic's name on the call screen was nearly invisible
+
 ## 1.0.0 (2026-11-12): Meet Reva, the virtual receptionist
 
 - 📞 **Call the clinic**: Ring a demo dental clinic from your iPhone. Reva answers, asks what's wrong, how much it hurts and when you can come, and you answer by voice or by typing.
