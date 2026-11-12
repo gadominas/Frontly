@@ -2,6 +2,24 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.1.0 (2026-11-12): A real phone number for Reva
+
+- 📞 **Call Reva for real**: Connect a Twilio number answered by an ElevenLabs agent: Reva picks up real calls, and the Call tab dials the number for you.
+- 🗂️ **Real calls at the front desk**: Calls the line took arrive by themselves, marked 📞, filed under the caller's record with the transcript, the details and a note, ready to book.
+- 👋 **She knows who's calling**: A known number gets a greeting by name and Reva knows the last visit, because Frontly shares a short patient list with your bridge.
+
+**Changes**
+
+- Settings › Phone line: the bridge address, its token (settings blueprint secrets: Keychain, native prompt, Make one), status, Check now, and Reva's instructions for ElevenLabs to copy
+- Frontly checks the bridge 1.5 s after opening and every 20 s while open; new calls are imported once, matched to patients by number, and get Frontly's AI note when a key is set, otherwise ElevenLabs' summary
+- bridge/: a Cloudflare Worker (call-start lookup for ElevenLabs, HMAC-verified post-call webhook, calls for Frontly, the patient brief) with its own tests and a step-by-step setup guide
+- The scripted Lithuanian greeting for a known patient is now "Ar tai …?", which works with any name
+- Tests: 10-phone-line (16 of 16 with the testkit), node bridge/test.mjs (11 checks)
+
+**Fixes**
+
+- The Lithuanian greeting put a name in the wrong case ("Ar kalbu su Jonas?")
+
 ## 1.0.2 (2026-11-12): Patients, organised
 
 - 🗂️ **Grouped by what needs doing**: Patients sort into To book, Visit booked, New and everyone else, or by last contact or name.
