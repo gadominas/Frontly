@@ -4,6 +4,35 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.4.1",
+      "date": "2026-11-13",
+      "title": "A tidier front desk bar",
+      "highlights": [
+        {
+          "icon": "🔘",
+          "title": "Real buttons",
+          "text": "Check line is now a proper button with a phone icon, and shows a spinner while it checks."
+        },
+        {
+          "icon": "👤",
+          "title": "Who's signed in",
+          "text": "The receptionist shows with their initials and today's bookings, on one line that never wraps."
+        },
+        {
+          "icon": "🚪",
+          "title": "Sign out",
+          "text": "A round button at the end of the bar, out of the way of Check line."
+        }
+      ],
+      "changes": [
+        "Front desk bar: the receptionist with initials and \"Booked today\", a Check line pill (phone icon, spinner while checking), a round Sign out button; nothing wraps onto two lines",
+        "Tests: 10-phone-line checks the bar's buttons (20 of 20 with the testkit)"
+      ],
+      "fixes": [
+        "Check line and Sign out were plain links that broke onto two lines"
+      ]
+    },
+    {
       "version": "1.4.0",
       "date": "2026-11-13",
       "title": "Your clinic, your dentists",

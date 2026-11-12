@@ -2,6 +2,21 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.4.1 (2026-11-13): A tidier front desk bar
+
+- 🔘 **Real buttons**: Check line is now a proper button with a phone icon, and shows a spinner while it checks.
+- 👤 **Who's signed in**: The receptionist shows with their initials and today's bookings, on one line that never wraps.
+- 🚪 **Sign out**: A round button at the end of the bar, out of the way of Check line.
+
+**Changes**
+
+- Front desk bar: the receptionist with initials and "Booked today", a Check line pill (phone icon, spinner while checking), a round Sign out button; nothing wraps onto two lines
+- Tests: 10-phone-line checks the bar's buttons (20 of 20 with the testkit)
+
+**Fixes**
+
+- Check line and Sign out were plain links that broke onto two lines
+
 ## 1.4.0 (2026-11-13): Your clinic, your dentists
 
 - 🧑‍⚕️ **Add your dentists**: Settings › Dentists: add each dentist with their role, what they do, their days and hours. Bookings, suggestions and the calendar use them.
