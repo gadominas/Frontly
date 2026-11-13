@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.13.0';
+const VERSION = '1.14.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -430,6 +430,7 @@ async function loadData() {
   calls = await load("calls", []);
   if (!Array.isArray(patients)) patients = [];
   if (!Array.isArray(calls)) calls = [];
+  calls.forEach(c => { if (!("reviewed" in c)) c.reviewed = c.status === "booked" || c.status === "closed" ? { at: c.at, by: "", how: "before" } : null; });   // calls from before the review list (needsReview in the page treats new ones the same way)
   usage = await load("usage", usage);
   dataLoaded = loadIssues.length === 0;   // anything missing: show what we have, save nothing over it
   if (!dataLoaded) return;
@@ -761,7 +762,7 @@ function deskRequest(pt, m, isNew) {
   if (m.service && SPECIALTIES[m.service]) { s.specialty = m.service; const d = doctorFor(m.service); if (d) s.doctor = d.id; }
   s.kind = "desk"; s.text = `Registered at the front desk${c.by ? " by " + c.by : ""}: ${c.fields.complaint || "to book"}${c.fields.preferred ? ". Best time: " + c.fields.preferred : ""}.`;
   delete s.mood;
-  c.summary = s; c.intent = "new_visit";
+  c.summary = s; c.intent = "new_visit"; c.reviewed = null;
   calls.unshift(c);
   return c;
 }
@@ -1129,7 +1130,7 @@ async function importPhoneCall(r) {
   else if (c.intent === "about_visit" || c.intent === "other") c.status = "noted";
   else if (waiting) {
     c.status = "noted"; c.followUp = waiting.id;
-    (waiting.again = waiting.again || []).push(c.id);
+    (waiting.again = waiting.again || []).push(c.id); waiting.reviewed = null;   // called again: worth another look
     const ws = waiting.summary || (waiting.summary = {});
     if ((summary.priority || 0) > (ws.priority || 0)) { ws.priority = summary.priority; ws.triage = summary.triage; }
     ws.flags = [...new Set([...(ws.flags || []), ...(summary.flags || [])])].slice(0, 5);
@@ -1228,6 +1229,7 @@ async function bookCall(m) {
     if (oc && oc !== c && oc.booking) oc.booking.movedTo = at;
   }
   c.status = "booked"; c.booking = { doctor: doc.id, at, dur, by: settings.deskUser, made: Date.now() };
+  c.reviewed = c.reviewed || { at: Date.now(), by: settings.deskUser || "", how: "booked" };   // booked: off the review list
   if (move) c.booking.movedFrom = move.at;
   return "";
 }
@@ -1236,7 +1238,7 @@ function cancelAppt(m) {
   if (!a) return;
   a.status = "cancelled"; a.cancelled = { at: Date.now(), by: settings.deskUser || "", reason: String(m.reason || "").trim().slice(0, 300) };
   const c = a.callId && calls.find(x => x.id === a.callId);
-  if (c && c.status === "booked") { c.status = "waiting"; delete c.booking; }
+  if (c && c.status === "booked") { c.status = "waiting"; delete c.booking; c.reviewed = null; }   // back on the lists
 }
 function addNote(m) {
   const text = String(m.text || "").trim().slice(0, 1000);
@@ -1597,7 +1599,7 @@ async function syncClient(ptId, force) {
     pt.appts.forEach(a => {
       if (a.status === "booked" && a.ext && a.ext.planner === id && a.ext.ref && a.at >= from && a.at <= to && !seen.has(a.id)) {
         a.status = "cancelled"; a.cancelled = { at: Date.now(), by: P.label, reason: `Not in ${P.label} any more` };
-        const c = a.callId && calls.find(x => x.id === a.callId); if (c && c.status === "booked") { c.status = "waiting"; delete c.booking; }
+        const c = a.callId && calls.find(x => x.id === a.callId); if (c && c.status === "booked") { c.status = "waiting"; delete c.booking; c.reviewed = null; }
       }
     });
     pt.appts.sort((a, b) => a.at - b.at);
@@ -1837,8 +1839,21 @@ async function handle(m) {
       if (moved) toast(`Booked in ${planner().label}. Cancel the old visit there too: Frontly can't do that through its API yet`);
       return call("__done", m.req, true, "");
     }
-    case "desk-close": { const c = calls.find(x => x.id === m.id); if (c) { c.status = "closed"; c.closedBy = settings.deskUser; } saveWidget(widgetSnapshot()); break; }
-    case "desk-reopen": { const c = calls.find(x => x.id === m.id); if (c && (c.status === "closed" || c.status === "noted")) { c.status = "waiting"; delete c.followUp; } saveWidget(widgetSnapshot()); break; }
+    case "desk-close": { const c = calls.find(x => x.id === m.id); if (c) { c.status = "closed"; c.closedBy = settings.deskUser; c.reviewed = { at: Date.now(), by: settings.deskUser || "", how: "closed" }; } saveWidget(widgetSnapshot()); break; }
+    case "desk-reopen": { const c = calls.find(x => x.id === m.id); if (c && (c.status === "closed" || c.status === "noted")) { c.status = "waiting"; delete c.followUp; c.reviewed = null; } saveWidget(widgetSnapshot()); break; }
+    case "review": {   // ticked off the review list by hand (or put back)
+      const c = calls.find(x => x.id === m.id);
+      if (c) c.reviewed = m.undo ? null : { at: Date.now(), by: settings.deskUser || "", how: "by hand" };
+      break;
+    }
+    case "review-all": calls.forEach(c => { if (!c.reviewed) c.reviewed = { at: Date.now(), by: settings.deskUser || "", how: "all at once" }; }); toast("All calls reviewed"); break;
+    case "call-remove": {   // a call taken out of Frontly altogether; the client's record and visits stay
+      const c = calls.find(x => x.id === m.id);
+      if (!c) break;
+      calls = calls.filter(x => x !== c);
+      calls.forEach(x => { if (x.again) x.again = x.again.filter(id => id !== c.id); if (x.followUp === c.id) delete x.followUp; });
+      saveWidget(widgetSnapshot()); toast("Call removed"); break;
+    }
     case "note": if (addNote(m)) { saveAll(); toast("Note added"); return push(); } return;
     case "pat-edit": {
       const err = editPatient(m);
@@ -2102,8 +2117,11 @@ async function handle(m) {
     case "usagereset": usage = { since: Date.now(), p: {} }; write("usage", usage); toast("Usage counters reset"); return push();
   }
   saveAll();
-  if (m.type === "signout") push();
+  if (m.type === "signout" || REDRAW.has(m.type)) push();
 }
+// Actions that change what the desk sees and fall through to here: they must redraw. Closing a case didn't, and
+// looked as if nothing happened, once the idle line checks stopped redrawing every 20 seconds (1.8.1).
+const REDRAW = new Set(["desk-close", "desk-reopen", "review", "review-all", "call-remove"]);
 
 function buildWebView() {
   wv = new WebView();
@@ -2601,6 +2619,16 @@ function clientApp() {
       }
     });
   }
+  // The pie on Check line: the time left until the next background check, emptying as it runs out
+  let lineAt = 0, lineEvery = 20000;
+  function drawPie() {
+    const el = document.querySelector(".lpie"); if (!el || !lineAt) return;
+    const left = Math.max(0, lineEvery - (Date.now() - lineAt)), frac = left / lineEvery;
+    el.style.setProperty("--p", Math.round(frac * 360) + "deg");
+    const b = el.closest("button"); if (b) b.title = `Next check in ${Math.ceil(left / 1000)} s`;
+  }
+  window.lineTick = (at, every) => { lineAt = +at || Date.now(); lineEvery = +every || 20000; drawPie(); };
+  setInterval(drawPie, 500);
   window.onLine = busy => { if (S.line) S.line.busy = !!busy; if (cfgOpen) keep($("#cfgsheet"), renderCfg); if (!K.on && !caseId && !patId && (tab === "call" || tab === "desk")) keep($("#list"), render); };
   window.toast = msg => {
     const t = $("#toast"); t.textContent = msg; t.classList.add("on");
@@ -2994,6 +3022,16 @@ function clientApp() {
 
   // Front desk: sign in, then the queue
   let deskFilter = "waiting", signErr = "";
+  function reviewHTML(list) {
+    if (!list.length) return `<div class="empty"><h2>All reviewed ✓</h2><p>Every call has been looked at. New calls appear here until someone books them, closes them or ticks them off.</p></div>`;
+    return `<p class="note rv-help">What happened on the line that nobody has looked at yet. Booking or closing a call ticks it off; ✓ ticks off one you've seen.</p>
+      <div class="rvlist">${list.map(c => { const s = c.summary || {}; return `<div class="rv">
+        <button class="rv-chk" data-act="review" data-id="${esc(c.id)}" aria-label="Mark ${esc(callName(c))}'s call reviewed" title="Mark reviewed">✓</button>
+        <button class="rv-body" data-act="opencase" data-id="${esc(c.id)}"><b>${esc(callName(c))}</b><small>${esc(whenFull(c.at))}${c.source === "phone" ? " · phone" : c.source === "desk" ? " · front desk" : ""}</small>
+          <span class="rv-out">${esc(outcomeOf(c))}</span>${s.text ? `<span class="rv-sum">${esc(s.text.length > 140 ? s.text.slice(0, 138) + "…" : s.text)}</span>` : ""}</button></div>`; }).join("")}</div>
+      <div class="reg-row"><button class="dbb" data-act="reviewall">${CHECK_SVG}<span>Mark all ${list.length} reviewed</span></button></div>`;
+  }
+  const CHECK_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   function deskHTML() {
     const st = S.settings;
     if (!st.deskUser) return `<section class="hero desk-in">
@@ -3006,14 +3044,14 @@ function clientApp() {
       <p class="note">Demo PIN: ${esc(S.demoPin)}</p>
       ${signErr ? `<p class="err">${esc(signErr)}</p>` : ""}
       <button class="primary block" data-act="signin">Sign in</button></section>`;
-    const sets = { waiting: S.calls.filter(c => c.status === "waiting"), booked: S.calls.filter(c => c.status === "booked"), closed: S.calls.filter(c => c.status === "closed" || c.status === "noted"), all: S.calls };
+    const sets = { review: S.calls.filter(needsReview).sort((a, b) => b.at - a.at), waiting: S.calls.filter(c => c.status === "waiting"), booked: S.calls.filter(c => c.status === "booked"), closed: S.calls.filter(c => c.status === "closed" || c.status === "noted"), all: S.calls };
     const list = sets[deskFilter] || sets.waiting;
     if (deskFilter === "waiting") list.sort((a, b) => ((b.summary || {}).priority || 0) - ((a.summary || {}).priority || 0) || a.at - b.at);
     const today = S.patients.reduce((n, p) => n + (p.appts || []).filter(a => a.status === "booked" && a.made && sod(a.made) === sod(Date.now())).length, 0);
     return `<div class="deskbar"><span class="db-who"><span class="av db-av" aria-hidden="true">${esc(initials(st.deskUser))}</span><span class="db-t"><b>${esc(st.deskUser)}</b><small>${today ? `Booked today: ${today}` : "Front desk"}</small></span></span>
-      <span class="db-acts">${S.line && S.line.on ? `<button class="dbb accent ${S.line.busy ? "busy" : ""}" data-act="line-sync" ${S.line.busy ? "disabled" : ""} aria-label="Check the phone line for new calls">${S.line.busy ? SPIN_SVG : LINE_SVG}<span>${S.line.busy ? "Checking" : "Check line"}</span></button>` : ""}<button class="dbb icon-only" data-act="signout" aria-label="Sign out" title="Sign out">${SIGNOUT_SVG}</button></span></div>
-      <div class="segbar"><div class="seg wide">${[["waiting", "To book"], ["booked", "Booked"], ["closed", "Other"], ["all", "All"]].map(([v, l]) => `<button class="${deskFilter === v ? "on" : ""}" data-act="dfilter" data-v="${v}">${l} <i>${sets[v].length}</i></button>`).join("")}</div></div>
-      ${list.length ? `<div class="queue">${groupByPatient(list).map(g => g.length === 1 ? queueCard(g[0]) : groupCard(g)).join("")}</div>
+      <span class="db-acts">${S.line && S.line.on ? `<button class="dbb accent lsync ${S.line.busy ? "busy" : ""}" data-act="line-sync" ${S.line.busy ? "disabled" : ""} aria-label="Check the phone line for new calls">${S.line.busy ? SPIN_SVG : LINE_SVG}<span>${S.line.busy ? "Checking" : "Check line"}</span>${S.line.busy ? "" : `<span class="lpie" aria-hidden="true"></span>`}</button>` : ""}<button class="dbb icon-only" data-act="signout" aria-label="Sign out" title="Sign out">${SIGNOUT_SVG}</button></span></div>
+      <div class="segbar"><div class="seg wide">${[["review", "Review"], ["waiting", "To book"], ["booked", "Booked"], ["closed", "Other"], ["all", "All"]].map(([v, l]) => `<button class="${deskFilter === v ? "on" : ""}" data-act="dfilter" data-v="${v}">${l} <i>${sets[v].length}</i></button>`).join("")}</div></div>
+      ${deskFilter === "review" ? reviewHTML(list) : list.length ? `<div class="queue">${groupByPatient(list).map(g => g.length === 1 ? queueCard(g[0]) : groupCard(g)).join("")}</div>
         <div class="reg-row"><button class="dbb" data-act="regopen" data-v="new">${PLUS_SVG}<span>Register someone</span></button></div>` : `<div class="empty"><h2>${deskFilter === "waiting" ? "Nobody is waiting" : "Nothing here yet"}</h2><p>${deskFilter === "waiting" ? `When someone calls, ${esc(S.assistant)}'s note lands here. Someone at the desk or on your own phone line? Register them here.` : "Calls show up here as you work through them."}</p>${deskFilter === "waiting" ? `<div class="aic-btns center"><button class="primary" data-act="regopen" data-v="new">Register someone</button><button class="sm" data-act="tab" data-v="call">Make a call</button></div>` : ""}</div>`}`;
   }
   // A patient with several calls in the same list gets one card, the calls inside it, most urgent first
@@ -3054,6 +3092,15 @@ function clientApp() {
   }
 
   // The case: one call, as the receptionist sees it, with booking
+  // The review list: every call someone at the desk hasn't looked at yet. Booking or closing ticks it off.
+  const needsReview = c => !c.reviewed && !(c.reviewed === undefined && (c.status === "booked" || c.status === "closed"));
+  function outcomeOf(c) {
+    if (c.status === "booked" && c.booking) return `Booked: ${dayLabel(c.booking.at)}, ${hhmm(c.booking.at)} with ${(docOf(c.booking.doctor) || {}).short || ""}`;
+    if (c.status === "waiting") return "Waiting to be booked";
+    if (c.status === "closed") return c.transcript && !c.transcript.some(x => x.who === "caller") ? "Nobody spoke" : "Closed without booking";
+    const what = c.followUp ? "Called again about a waiting request" : INTENT_L[c.intent] || "Other";
+    return what + (c.delivered ? " · the message was passed on" : "");
+  }
   let caseId = "", caseDoc = "", caseDay = 0, caseSlot = 0, caseArmed = "", caseBusy = false, showTx = false, caseMove = "", caseSug = null, casePick = 0, caseDur = 0, caseDurSug = null, caseSugDoc = "";
   const fmtLen = m => m >= 60 && m % 60 === 0 ? `${m / 60} h` : m > 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
   const snapL = n => (S.lengths || [30]).reduce((b, x) => Math.abs(x - n) < Math.abs(b - n) ? x : b, (S.lengths || [30])[0]);
@@ -3296,6 +3343,8 @@ function clientApp() {
     const s = c.summary || {}, f = c.fields || {}, pt = byPatient(c.patientId);
     const past = pt ? (pt.appts || []).filter(a => a.callId !== c.id).sort((a, b) => b.at - a.at) : [];
     el.innerHTML = `<div class="sh-head"><h2>${esc(callName(c))}</h2><button class="link" data-act="caseclosesheet">Done</button></div><div class="sh-body">
+      ${needsReview(c) ? `<div class="rvbar"><span>Not reviewed yet</span><button class="sm" data-act="review" data-id="${esc(c.id)}">${CHECK_SVG} Mark reviewed</button></div>`
+        : c.reviewed ? `<p class="note rv-done">✓ Reviewed${c.reviewed.by ? " by " + esc(c.reviewed.by) : ""}${c.reviewed.how === "booked" ? " (booked)" : c.reviewed.how === "closed" ? " (closed)" : ""}, ${esc(rel(c.reviewed.at))} <button class="link small" data-act="unreview" data-id="${esc(c.id)}">Undo</button></p>` : ""}
       <div class="sumbox">${s.kind === "ai" ? `<span class="badge-ai">✦ AI note by ${PN[s.provider] || "AI"}</span>` : s.kind === "desk" ? `<span class="badge-ex">Registered at the front desk</span>` : `<span class="badge-ex">Note · no AI</span>`}
         <p class="sum-t">${esc(s.text || "")}</p>
         <div class="chips">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Real phone call</span>` : c.source === "desk" ? `<span class="pill soft">✎ Front desk</span>` : ""}${s.priority ? `<span class="pill">Priority ${esc(s.priority)}/5</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}${c.isNew ? `<span class="pill">New ${esc(word("client"))}</span>` : ""}${intentPill(c)}</div>
@@ -3318,6 +3367,7 @@ function clientApp() {
       <h3 class="sec2">Add a note</h3>
       <textarea id="casenote" class="cfgin wide" rows="3" placeholder="For example: called back, prefers Dr. Kazlauskienė"></textarea>
       <button class="sm" data-act="addnote" data-id="${esc(c.id)}">Add note</button>
+      <div class="rm-row"><button class="link small danger" data-act="callremove" data-id="${esc(c.id)}">Remove this call</button></div>
     </div>`;
     el.scrollTop = keep;
     const lc = el.querySelector(".chip.len.on"); if (lc && lc.parentElement) lc.parentElement.scrollLeft = Math.max(0, lc.offsetLeft - lc.parentElement.clientWidth / 2 + lc.offsetWidth / 2);   // the chosen length in view
@@ -3567,6 +3617,19 @@ function clientApp() {
   function renderDlg() {
     const el = $("#dlg");
     if (!dlg) { el.classList.remove("open"); el.innerHTML = ""; lockBody(); return; }
+    if (dlg.kind === "removecall" || dlg.kind === "reviewall") {
+      const c = dlg.kind === "removecall" && byCall(dlg.id), n = S.calls.filter(needsReview).length;
+      if (dlg.kind === "removecall" && !c) { dlg = null; renderDlg(); return; }
+      el.classList.add("open"); lockBody();
+      el.innerHTML = `<div class="dlg-card" role="dialog" aria-modal="true" aria-labelledby="dlg-t">
+        <h2 id="dlg-t">${c ? "Remove this call?" : `Mark all ${n} reviewed?`}</h2>
+        ${c ? `<p class="dlg-what"><b>${esc(callName(c))}</b><span>${esc(whenFull(c.at))}</span><span class="muted">${esc(outcomeOf(c))}</span></p>
+          <p class="note">The call, its notes and conversation are deleted from Frontly. ${c.patientId ? `${esc(callName(c))}'s record and ${esc(word("visits"))} stay.` : ""}</p>`
+          : `<p class="note">They leave the review list. Nothing else changes: calls waiting to be booked still wait.</p>`}
+        <div class="dlg-btns"><button class="sm" data-act="dlgkeep">${c ? "Keep it" : "Not now"}</button><button class="dlg-go ${c ? "" : "ok"}" data-act="dlgdo">${c ? "Remove" : "Mark reviewed"}</button></div>
+      </div>`;
+      return;
+    }
     const pt = byPatient(dlg.patient), a = pt && (pt.appts || []).find(x => x.id === dlg.appt);
     if (!a) { dlg = null; renderDlg(); return; }
     const d = docOf(a.doctor) || {}, P = a.ext && (S.planners || []).find(x => x.id === a.ext.planner);
@@ -3748,6 +3811,16 @@ function clientApp() {
       case "copyconf": { const c = byCall(id); if (c && c.booking) send("copy", { text: confText(c) }); break; }
       case "apptcancel": dlg = { patient: t.dataset.p, appt: v, why: "", err: "", busy: false }; renderDlg(); setTimeout(() => { const f = $("#dlg-why"); if (f) f.focus(); }, 80); break;
       case "dlgkeep": dlg = null; renderDlg(); break;
+      case "review": send("review", { id }); break;
+      case "unreview": send("review", { id, undo: true }); break;
+      case "reviewall": dlg = { kind: "reviewall" }; renderDlg(); break;
+      case "callremove": dlg = { kind: "removecall", id }; renderDlg(); break;
+      case "dlgdo": {
+        if (!dlg) break;
+        if (dlg.kind === "removecall") { const rid = dlg.id; send("call-remove", { id: rid }); if (caseId === rid) { caseId = ""; renderCase(); } }
+        else if (dlg.kind === "reviewall") send("review-all", {});
+        dlg = null; renderDlg(); break;
+      }
       case "dlgcancel": {
         if (!dlg || dlg.busy) break;
         dlg.why = ($("#dlg-why") || {}).value || ""; dlg.busy = true; dlg.err = ""; renderDlg();
@@ -4157,6 +4230,23 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 #plansheet{z-index:13}
 #impsheet{z-index:14}
 #regsheet{z-index:12}
+.lsync{position:relative}
+.lpie{position:absolute;top:-4px;right:-4px;width:15px;height:15px;border-radius:50%;background:conic-gradient(var(--signal) var(--p,360deg),var(--rule) 0);box-shadow:0 0 0 2px var(--paper)}
+.rvlist{max-width:680px;margin:0 auto;padding:4px 14px 0;display:flex;flex-direction:column;gap:8px}
+.rv{display:flex;align-items:stretch;gap:8px}
+.rv-chk{flex:none;width:46px;border-radius:14px;border:1.5px solid var(--rule);background:var(--sheet);color:var(--muted);font-size:20px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.rv-chk:active{background:var(--signal);color:var(--paper);border-color:var(--signal)}
+.rv-body{flex:1;min-width:0;text-align:left;display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--rule);border-radius:14px;background:var(--sheet)}
+.rv-body small{color:var(--muted);font-size:calc(13px * var(--ts))}
+.rv-out{font-weight:600;font-size:calc(14px * var(--ts));color:var(--ink)}
+.rv-sum{color:var(--ink-2);font-size:calc(13.5px * var(--ts))}
+.rv-help{max-width:680px;margin:10px auto 2px;padding:0 16px}
+.rvbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 12px;padding:8px 10px 8px 14px;border:1px solid var(--amber);border-radius:14px;color:var(--amber);font-weight:600}
+.rvbar .sm{display:inline-flex;align-items:center;gap:6px}
+.rv-done{margin:0 0 10px}
+.rm-row{display:flex;justify-content:center;margin:22px 0 4px}
+.link.danger{color:var(--danger)}
+.dlg-go.ok{background:var(--signal)}
 .sentnote pre{white-space:pre-wrap;font:inherit;font-size:calc(14px * var(--ts));margin:4px 0 0;padding:8px 10px;border-radius:10px;background:var(--paper);border:1px solid var(--rule)}
 .syncrow{display:flex;align-items:center;gap:10px;margin:12px 0 2px;padding:10px 12px;border:1px solid var(--rule);border-radius:14px;background:var(--sheet)}
 .syncrow.bad{border-color:var(--amber)}
@@ -4942,9 +5032,11 @@ async function bootApp(isClosed) {
   Timer.schedule(6000, false, () => { widgetIcon(); });
   Timer.schedule(1500, false, () => { if (!isClosed()) syncLine(false); });   // calls the real line took while Frontly was closed
   Timer.schedule(1200, false, () => { if (!isClosed()) diaryAhead(); });   // an outside planning engine's diary
-  lineTimer = Timer.schedule(20000, true, () => { if (isClosed()) { lineTimer.invalidate(); return; } syncLine(false); diaryAhead(); });
+  call("lineTick", Date.now(), LINE_EVERY);
+  lineTimer = Timer.schedule(LINE_EVERY, true, () => { if (isClosed()) { lineTimer.invalidate(); return; } call("lineTick", Date.now(), LINE_EVERY); syncLine(false); diaryAhead(); });
 }
 let lineTimer = null;
+const LINE_EVERY = 20000;   // the phone line is checked this often while Frontly is open (the pie on Check line counts down)
 
 async function main() {
   await waitForOtherWindow();
