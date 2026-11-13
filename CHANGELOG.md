@@ -2,6 +2,25 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.12.1 (2026-11-13): A tidier booking box
+
+- 📏 **Lengths in line**: The chosen visit length no longer sits higher than the others.
+- 👤 **Someone who can be booked**: With ClinicCards, the person suggested is one linked to it, even if the service usually goes to someone who isn't.
+- 🧽 **Less clutter**: No empty day strip or misleading "no times" line; Pick a date spans the box when there are no days.
+
+**Changes**
+
+- Length chips have one fixed size; the suggested one has its own class
+- With ClinicCards: linked people listed first; a linked one chosen and marked suggested when the usual person isn't linked
+- An unlinked person: only the reason, without a day strip or times; no days: a full-width Pick a date
+- "Matches what the caller asked for" only when there are times to match
+- Tests: 27-booking-box-cliniccards (33 of 33 with the testkit)
+
+**Fixes**
+
+- The selected visit length sat higher than the others: it shared a class name with the suggestion card and took its bottom margin
+- With ClinicCards, a person who isn't linked was preselected, leaving no times to choose
+
 ## 1.12.0 (2026-11-13): ClinicCards comments in the client's language
 
 - 🇱🇹 **In the language of the call**: A call held in Lithuanian gets a Lithuanian comment in ClinicCards; Latvian and English likewise.

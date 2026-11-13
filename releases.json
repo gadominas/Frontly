@@ -4,6 +4,39 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.12.1",
+      "date": "2026-11-13",
+      "title": "A tidier booking box",
+      "highlights": [
+        {
+          "icon": "📏",
+          "title": "Lengths in line",
+          "text": "The chosen visit length no longer sits higher than the others."
+        },
+        {
+          "icon": "👤",
+          "title": "Someone who can be booked",
+          "text": "With ClinicCards, the person suggested is one linked to it, even if the service usually goes to someone who isn't."
+        },
+        {
+          "icon": "🧽",
+          "title": "Less clutter",
+          "text": "No empty day strip or misleading \"no times\" line; Pick a date spans the box when there are no days."
+        }
+      ],
+      "changes": [
+        "Length chips have one fixed size; the suggested one has its own class",
+        "With ClinicCards: linked people listed first; a linked one chosen and marked suggested when the usual person isn't linked",
+        "An unlinked person: only the reason, without a day strip or times; no days: a full-width Pick a date",
+        "\"Matches what the caller asked for\" only when there are times to match",
+        "Tests: 27-booking-box-cliniccards (33 of 33 with the testkit)"
+      ],
+      "fixes": [
+        "The selected visit length sat higher than the others: it shared a class name with the suggestion card and took its bottom margin",
+        "With ClinicCards, a person who isn't linked was preselected, leaving no times to choose"
+      ]
+    },
+    {
       "version": "1.12.0",
       "date": "2026-11-13",
       "title": "ClinicCards comments in the client's language",
