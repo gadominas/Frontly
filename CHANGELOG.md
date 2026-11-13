@@ -2,6 +2,19 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.15.0 (2026-11-13): Import staff from ClinicCards
+
+- 👥 **Bring them in, linked**: Settings › Dentists › Import from ClinicCards: tick who takes bookings, and they arrive linked: no adding and linking one by one.
+- 🩺 **Their service, guessed**: From their job title in ClinicCards, in English or Lithuanian (higienistė, chirurgas, ortodontas…), and changeable before importing.
+- 🗓️ **Their days and hours**: Taken from their ClinicCards shifts over the next four weeks.
+
+**Changes**
+
+- Import from ClinicCards next to Add in Settings › Dentists, and in the ClinicCards window (replacing "Bring in everyone")
+- Everyone in ClinicCards is listed with role and speciality: doctors and specialists ticked, assistants and admins not; already linked ones marked; the same name in Frontly is linked, not added twice
+- Service guessed from job titles (dental and car-service templates know their titles), days and hours from four weeks of shifts
+- Tests: 31-import-staff, 17 updated (36 of 36 with the testkit)
+
 ## 1.14.0 (2026-11-13): A review list for every call
 
 - ✅ **Review**: Front desk › Review lists every call nobody has looked at, with what came of it. Booking or closing ticks a call off; ✓ ticks off the rest.

@@ -4,6 +4,35 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.15.0",
+      "date": "2026-11-13",
+      "title": "Import staff from ClinicCards",
+      "highlights": [
+        {
+          "icon": "👥",
+          "title": "Bring them in, linked",
+          "text": "Settings › Dentists › Import from ClinicCards: tick who takes bookings, and they arrive linked: no adding and linking one by one."
+        },
+        {
+          "icon": "🩺",
+          "title": "Their service, guessed",
+          "text": "From their job title in ClinicCards, in English or Lithuanian (higienistė, chirurgas, ortodontas…), and changeable before importing."
+        },
+        {
+          "icon": "🗓️",
+          "title": "Their days and hours",
+          "text": "Taken from their ClinicCards shifts over the next four weeks."
+        }
+      ],
+      "changes": [
+        "Import from ClinicCards next to Add in Settings › Dentists, and in the ClinicCards window (replacing \"Bring in everyone\")",
+        "Everyone in ClinicCards is listed with role and speciality: doctors and specialists ticked, assistants and admins not; already linked ones marked; the same name in Frontly is linked, not added twice",
+        "Service guessed from job titles (dental and car-service templates know their titles), days and hours from four weeks of shifts",
+        "Tests: 31-import-staff, 17 updated (36 of 36 with the testkit)"
+      ],
+      "fixes": []
+    },
+    {
       "version": "1.14.0",
       "date": "2026-11-13",
       "title": "A review list for every call",
