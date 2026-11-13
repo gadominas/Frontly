@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.8.0';
+const VERSION = '1.8.1';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -1096,7 +1096,8 @@ async function importPhoneCall(r) {
 let lineBusy = false;
 async function syncLine(manual) {
   if (!lineOn() || lineBusy || !dataLoaded) { if (manual && !lineOn()) toast("Set up the phone line in Settings first"); return; }
-  lineBusy = true; call("onLine", true);
+  lineBusy = true; if (manual) call("onLine", true);   // the spinner only when someone tapped Check line
+  const was = JSON.stringify([settings.lineLast && settings.lineLast.ok, settings.lineLast && settings.lineLast.msg, settings.linePhone]);
   let added = [];
   try {
     const j = await lineReq("GET", "/calls?since=" + (Number(settings.lineSince) || 0));
@@ -1114,10 +1115,13 @@ async function syncLine(manual) {
     if (manual) toast(settings.lineLast.msg);
   }
   lineBusy = false;
-  saveAll();
+  // The background check every 20 s redraws nothing unless something changed: a redraw would wipe what's being typed
+  const changed = added.length > 0 || was !== JSON.stringify([settings.lineLast.ok, settings.lineLast.msg, settings.linePhone]);
+  if (changed || manual) saveAll();
   if (added.length) { saveWidget(widgetSnapshot()); toast(added.length === 1 ? `New call from the phone line: ${added[0].fields.name || added[0].phone}` : `${added.length} new calls from the phone line`); }
   else if (manual && settings.lineLast.ok) toast("No new calls on the phone line");
-  push(); call("onLine", false);
+  if (changed || manual) push();
+  if (manual) call("onLine", false);
 }
 // Reva's instructions for the ElevenLabs agent, with the variables the bridge fills in when a call starts.
 const PHONE_PROMPT = () => { const W = WORDS, age = BIZ.ask.includes("age"); return `You are ${cfg("assistantName")}, the virtual receptionist of ${cfg("clinicName")}, ${BIZ.kind} in ${cfg("city")}. You answer real phone calls.
@@ -1327,17 +1331,21 @@ async function loadDiary(from, to, force) {
   if (extDiary && extDiary.id === id) { from = Math.min(from, extDiary.from); to = Math.max(to, extDiary.to); }
   to = Math.min(to, from + 120 * DAY);
   extBusy = true;
+  let next;
   try {
     const d = await PLANNERS[id].diary(from, to), byExt = {};
     ALL_DOCTORS.forEach(doc => { const e = doc.ext && doc.ext[id]; if (e) byExt[e] = doc.id; });
     const shifts = {}, busy = {};
     d.shifts.forEach(x => { const k = byExt[x.staff]; if (k) (shifts[k] = shifts[k] || []).push(x); });
     d.busy.forEach(x => { const ks = x.staff ? [byExt[x.staff]].filter(Boolean) : Object.values(byExt); ks.forEach(k => (busy[k] = busy[k] || []).push({ start: x.start, end: x.end })); });
-    extDiary = { id, from, to, at: Date.now(), shifts, busy, step: d.step || 0, err: "" };
+    next = { id, from, to, at: Date.now(), shifts, busy, step: d.step || 0, err: "" };
   } catch (e) {
-    extDiary = { id, from, to, at: Date.now(), shifts: {}, busy: {}, step: 0, err: String(e.message || e).slice(0, 160) };
+    next = { id, from, to, at: Date.now(), shifts: {}, busy: {}, step: 0, err: String(e.message || e).slice(0, 160) };
   } finally { extBusy = false; }
-  return true;
+  const sig = x => x ? JSON.stringify([x.id, x.from, x.to, x.shifts, x.busy, x.step, x.err]) : "";
+  const changed = sig(next) !== sig(extDiary);
+  if (changed) extDiary = next; else extDiary.at = next.at;   // the same diary: keep it, don't redraw
+  return changed;
 }
 const diaryAhead = () => loadDiary(Date.now(), Date.now() + (cfg("daysAhead") + 7) * DAY).then(changed => { if (changed) push(); }).catch(() => {});
 // Books at the engine first; Frontly keeps its copy only when that worked
@@ -2310,7 +2318,7 @@ function clientApp() {
       }
     });
   }
-  window.onLine = busy => { if (S.line) S.line.busy = !!busy; if (cfgOpen) renderCfg(); if (!K.on && !caseId && !patId && (tab === "call" || tab === "desk")) render(); };
+  window.onLine = busy => { if (S.line) S.line.busy = !!busy; if (cfgOpen) keep($("#cfgsheet"), renderCfg); if (!K.on && !caseId && !patId && (tab === "call" || tab === "desk")) keep($("#list"), render); };
   window.toast = msg => {
     const t = $("#toast"); t.textContent = msg; t.classList.add("on");
     clearTimeout(window.__tt); window.__tt = setTimeout(() => t.classList.remove("on"), 3200);
@@ -3241,6 +3249,24 @@ function clientApp() {
   const lockBody = () => document.body.classList.toggle("locked", !!(cfgOpen || aiOpen || K.on || caseId || patId));
 
   // ---- bridge ← Scriptable ----
+  // A redraw must never lose what's being typed. Fields the user edited are marked (data-dirty); keep() redraws a
+  // container and puts their values, the focus and the cursor back. A field stops being marked once its value is
+  // saved (a change that sends it), so a value the app corrected isn't overwritten. Only for a container that was open
+  // before and after: a form opened afresh starts clean.
+  const fieldKey = x => x.id ? "#" + x.id : x.dataset.k ? (x.className.match(/\b(wordin|plancfg|cfgin)\b/) || [""])[0] + ":" + x.dataset.k : x.dataset.staff ? "staff:" + x.dataset.staff : "";
+  const shown = el => !!el && (el.id === "list" || el.classList.contains("open"));
+  function keep(el, draw) {
+    if (!el || !shown(el)) { draw(); return; }
+    const vals = {}, act = document.activeElement, inside = act && el.contains(act) && /^(INPUT|TEXTAREA|SELECT)$/.test(act.tagName);
+    const fk = inside ? fieldKey(act) : "", sel = inside && typeof act.selectionStart === "number" ? [act.selectionStart, act.selectionEnd] : null;
+    el.querySelectorAll("input, textarea, select").forEach(x => { const k = fieldKey(x); if (k && x.dataset.dirty) vals[k] = x.type === "checkbox" ? x.checked : x.value; });
+    draw();
+    if (!shown(el)) return;
+    const now = [...el.querySelectorAll("input, textarea, select")];
+    now.forEach(x => { const k = fieldKey(x); if (k && k in vals) { if (x.type === "checkbox") x.checked = vals[k]; else if (x.value !== vals[k]) x.value = vals[k]; x.dataset.dirty = "1"; } });
+    if (fk) { const n = now.find(x => fieldKey(x) === fk); if (n && document.activeElement !== n) { n.focus({ preventScroll: true }); if (sel) try { n.setSelectionRange(sel[0], sel[1]); } catch (e) {} } }
+  }
+  document.addEventListener("input", e => { if (e.target.matches && e.target.matches("input, textarea, select")) e.target.dataset.dirty = "1"; }, true);
   let lastExtAt = 0;
   window.recv = st => {
     S = st;
@@ -3248,8 +3274,9 @@ function clientApp() {
     aiLoading.clear();
     if (caseId && !byCall(caseId)) caseId = "";
     if (patId && !byPatient(patId)) patId = "";
-    if (tab !== "patients" || document.activeElement !== $("#pq")) render(); else renderChrome();
-    renderCase(); renderPat(); renderAI(); renderCfg(); renderPlan(); renderImp(); renderReg();
+    if (tab !== "patients" || document.activeElement !== $("#pq")) keep($("#list"), render); else renderChrome();
+    keep($("#casesheet"), renderCase); keep($("#patsheet"), renderPat); keep($("#aisheet"), renderAI); keep($("#cfgsheet"), renderCfg);
+    keep($("#plansheet"), renderPlan); keep($("#impsheet"), renderImp); keep($("#regsheet"), renderReg);
   };
   function signIn() {
     const who = ($("#dwho") || {}).value, pin = ($("#dpin") || {}).value;
@@ -3471,6 +3498,8 @@ function clientApp() {
   ["gesturestart", "gesturechange", "gestureend"].forEach(ev => document.addEventListener(ev, e => e.preventDefault(), { passive: false }));
   document.addEventListener("touchmove", e => { if (e.touches.length > 1 || (e.scale && e.scale !== 1)) e.preventDefault(); }, { passive: false });
   document.addEventListener("change", e => {
+    // a field whose change is saved at once is clean again; form fields (saved with a button) stay marked
+    if (e.target.dataset && !e.target.closest(".dform, #regsheet, #impsheet, .bk") && !/^(imptext|patnote|patmsg|svcnew|newnum|ctext|pq)$/.test(e.target.id || "")) delete e.target.dataset.dirty;
     const c = e.target.classList;
     if (!c) return;
     if (c.contains("ttsvoicesel")) { S.settings.ttsVoice = e.target.value; send("set", { k: "ttsVoice", v: e.target.value }); return; }
