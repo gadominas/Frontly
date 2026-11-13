@@ -2,6 +2,21 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.10.0 (2026-11-13): How long each visit takes
+
+- ⏱️ **A length for every visit**: Choose 5 minutes to 3 hours in the booking box; Frontly suggests one and says why.
+- 🗣️ **From what the caller says**: "An hour", "30 minutes", "pusvalandžio": a length the caller asks for comes first; otherwise the AI judges from the reason, or the service's usual length is used.
+- 🧩 **Times that fit**: Only times with room for the whole visit are offered: no overlaps, nothing past the end of the day or the ClinicCards shift.
+
+**Changes**
+
+- Booking box: How long (the lengths in Settings › Booking › Visit lengths to offer), the suggestion and its reason, start–end on the button and the booked visit
+- Suggested length: the caller's own words (sentences about the visit only, so "it has hurt for two hours" doesn't count), then the AI note's estimate, then the service's usual length
+- Settings › Business: how long each service usually takes (dental, car-service and office templates come with their own)
+- Visits have lengths: no overlap with another visit, the rules check the whole span, the calendar fills the whole span, ClinicCards gets the right end time, and the note and the phone line's brief say how long
+- The AI planner is told the length
+- Tests: 24-visit-length (30 of 30 with the testkit)
+
 ## 1.9.0 (2026-11-13): The whole story with every booking
 
 - 🗂️ **Everything goes with the booking**: The ClinicCards visit note now carries the AI summary, every detail, warnings, mood, front-desk notes and the whole conversation.
