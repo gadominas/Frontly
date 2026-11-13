@@ -2,6 +2,21 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.6.0 (2026-11-13): Book into ClinicCards
+
+- 🔌 **Planning engines**: Settings › Planning: book in Frontly's own diary, or straight into ClinicCards. More planning services can plug in the same way.
+- ⚙️ **A window for each**: ClinicCards has its own settings: the API key, a connection test, the cabinet, the note, and which ClinicCards person each of your staff is.
+- 📅 **Real free times**: With ClinicCards in use, the times come from its shifts minus its visits, and a booking is checked and made there first.
+
+**Changes**
+
+- A pluggable planning-engine layer: each engine is one entry with its settings fields, its secret, what it can't do, and test, staff, diary and book calls (docs/INTEGRATIONS.md)
+- ClinicCards: Token-header API; staff, cabinets, booking step, shifts, visits and blocked time read; patient found by full-digit number or created; a BOOKING visit made; the time re-checked live first
+- Each engine's own settings window: API key in the Keychain, Test, its options, staff links, Import (links by name, "Dr." or not), Use; can't be used before a test
+- Booking box and calendar use the engine's diary; a person not linked says so; the engine's errors are shown and nothing is kept
+- Cancelling or moving a visit booked in ClinicCards reminds you to do it there too (its API has no call for it)
+- Tests: 17-cliniccards with the API faked as the 4WP Booking connector uses it (23 of 23 with the testkit)
+
 ## 1.5.2 (2026-11-13): Edit a client's details
 
 - ✏️ **Edit details**: Fix a name, a phone number or an age on the client's page. The new name shows everywhere and reaches the phone line at once.
