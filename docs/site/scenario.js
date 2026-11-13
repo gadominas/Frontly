@@ -161,7 +161,7 @@ module.exports = {
         await h.wait(400);
       } },
     { id: '06-patients', label: 'Every patient on file', caption: 'Grouped by what needs doing, with the next visit, the last call and the history.', settings: { tab: 'patients' } },
-    { id: '07-launch', label: 'Launch screen', caption: 'The tooth draws itself, then Answer. Note. Book. Tap to skip.', settle: 1600 },
+    { id: '07-launch', label: 'Launch screen', caption: 'The logo draws itself, then Answer. Note. Book. Tap to skip.', settle: 1600 },
     { id: '08-settings', label: 'Settings', caption: 'Language, Reva’s voice, how she listens, colours and every limit.',
       run: async (h) => { await h.tap('[data-act="cfgopen"]'); await h.wait(500); } },
     { id: '09-ai-settings', label: 'AI on your own key', caption: 'Claude or OpenAI, any model, with token usage per day and feature.',

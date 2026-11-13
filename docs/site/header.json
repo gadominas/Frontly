@@ -6,7 +6,7 @@
     "Note.",
     "Book."
   ],
-  "sentence": "A patient calls the clinic. Reva, a virtual receptionist, asks the right questions and leaves a note the front desk can book from.",
+  "sentence": "Someone calls the office. Reva, a virtual receptionist, asks the right questions and leaves a note the front desk can book from.",
   "shots": [
     {
       "card": "02-live-call.png",
@@ -23,10 +23,10 @@
     "w": 592,
     "rotate": 0,
     "front": true,
-    "svg": "<svg viewBox='0 0 592 90' xmlns='http://www.w3.org/2000/svg'><path d='M6 52 H300 L322 52 L340 18 L364 82 L384 30 L400 52 H540' fill='none' stroke='#5EEAD4' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'/><circle cx='562' cy='52' r='18' fill='{accent}'/></svg>"
+    "svg": "<svg viewBox='0 0 592 90' xmlns='http://www.w3.org/2000/svg'><path d='M6 52 H252 L264 42 L276 62 L288 30 L300 74 L312 18 L324 84 L336 26 L348 76 L360 38 L372 64 L384 46 L396 56 L408 52 H540' fill='none' stroke='#5EEAD4' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'/><circle cx='562' cy='52' r='18' fill='{accent}'/></svg>"
   },
   "benefit": "A virtual receptionist that screens every caller and leaves a note ready to book",
   "steps": "Call the office. Answer Reva. Book the visit.",
   "facts": "Free · iPhone and iPad · Runs in the free Scriptable app · For a dental clinic, a car service or any office · AI is optional, with your own Claude or OpenAI key",
-  "bannerAlt": "Frontly: Answer. Note. Book. A patient calls a dental clinic, Reva the virtual receptionist asks the right questions and the front desk books the visit. Two iPhone screens show a live call with Reva's notes and the front desk queue, crossed by a teal voice line ending in a pink dot."
+  "bannerAlt": "Frontly: Answer. Note. Book. Someone calls the office, Reva the virtual receptionist asks the right questions and the front desk books the visit. Two iPhone screens show a live call with Reva's notes and the front desk queue, crossed by a teal voice line ending in a pink dot."
 }

@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -3408,8 +3408,8 @@ body.calling #top{visibility:hidden}
 .spIcon svg{width:100%;height:100%;display:block;overflow:visible}
 .spFrame{fill:none;stroke:var(--sp-ink);stroke-opacity:.35;stroke-width:7;stroke-linecap:round;stroke-linejoin:round;opacity:0;animation:spFade .4s ease .25s forwards}
 .spDraw{fill:none;stroke:var(--sp-ink);stroke-width:12;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:100;stroke-dashoffset:100;animation:spDraw .8s ease-in-out .15s forwards}
-.spPop{fill:var(--sp-accent);transform-box:fill-box;transform-origin:center;transform:scale(0);animation:spPop .45s cubic-bezier(.3,1.7,.5,1) .75s forwards}
-.spSweep{fill:none;stroke:var(--sp-accent2);stroke-width:9;stroke-linecap:round;stroke-linejoin:round;opacity:0;transform:translateX(var(--sp-sweep-from,-120px));animation:spSweep 1s ease-in-out .95s forwards}
+.spPop{fill:var(--sp-accent);stroke:var(--sp-bg);stroke-width:6;transform-box:fill-box;transform-origin:center;transform:scale(0);animation:spPop .45s cubic-bezier(.3,1.7,.5,1) .75s forwards}
+.spSweep{fill:none;stroke:var(--sp-accent2);stroke-width:12;stroke-linecap:round;stroke-linejoin:round;opacity:0;transform:translateX(var(--sp-sweep-from,-120px));animation:spSweep 1s ease-in-out .95s forwards}
 .spWord{font:800 40px/1 var(--sp-font,ui-rounded,-apple-system,system-ui,sans-serif);letter-spacing:-.02em;opacity:0;transform:translateY(10px);animation:spUp .45s ease 1.05s forwards}
 .spWord span{color:var(--sp-accent)}
 .spTag{font:600 15px/1.3 -apple-system,system-ui,sans-serif;letter-spacing:.06em;color:var(--sp-muted);opacity:0;transform:translateY(8px);animation:spUp .45s ease 1.4s forwards}
@@ -3433,15 +3433,16 @@ body.calling #top{visibility:hidden}
 }
 `;
 
-// Frontly logo: a tooth between two sound marks, a pink "on the line" dot and a teal voice line. Header mark,
-// launch screen and app icon are the same drawing.
+// Frontly logo: a request that becomes a booking. A speech bubble that is also a calendar page (binder rings, a
+// header line), a teal check for "booked", a pink dot for a new call, two faint sound marks for the phone line.
+// Not tied to one kind of business. Header mark, launch screen and app icon are the same drawing.
 const LOGO_PARTS = {
-  frame: 'M44 98 C35 112 35 134 44 148 M196 98 C205 112 205 134 196 148',
-  draw: 'M120 66 C104 52 74 50 64 74 C54 98 64 126 72 148 C78 166 80 196 94 198 C108 200 108 162 120 158 C132 162 132 200 146 198 C160 196 162 166 168 148 C176 126 186 98 176 74 C166 50 136 52 120 66 Z',
-  pop: { cx: 188, cy: 52, r: 13 },
-  sweep: 'M94 116 H106 L112 102 L122 130 L130 106 L136 116 H148',
+  frame: 'M38 104 C31 117 31 133 38 146 M202 104 C209 117 209 133 202 146',
+  draw: 'M78 70 H162 Q180 70 180 88 V150 Q180 168 162 168 H112 L82 194 L88 168 H78 Q60 168 60 150 V88 Q60 70 78 70 Z M60 100 H180 M94 56 V82 M146 56 V82',
+  pop: { cx: 180, cy: 70, r: 15 },
+  sweep: 'M96 133 L113 149 L146 117',
 };
-const LOGO_SVG = `<path d="${LOGO_PARTS.frame}" fill="none" stroke="#F6F7F9" stroke-opacity="0.35" stroke-width="7" stroke-linecap="round"/><path d="${LOGO_PARTS.draw}" fill="none" stroke="#F6F7F9" stroke-width="12" stroke-linejoin="round"/><circle cx="${LOGO_PARTS.pop.cx}" cy="${LOGO_PARTS.pop.cy}" r="${LOGO_PARTS.pop.r}" fill="#F59BB5"/><path d="${LOGO_PARTS.sweep}" fill="none" stroke="#5EEAD4" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`;
+const LOGO_SVG = `<path d="${LOGO_PARTS.frame}" fill="none" stroke="#F6F7F9" stroke-opacity="0.35" stroke-width="7" stroke-linecap="round"/><path d="${LOGO_PARTS.draw}" fill="none" stroke="#F6F7F9" stroke-width="12" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${LOGO_PARTS.pop.cx}" cy="${LOGO_PARTS.pop.cy}" r="${LOGO_PARTS.pop.r}" fill="#F59BB5" stroke="#0E1116" stroke-width="6"/><path d="${LOGO_PARTS.sweep}" fill="none" stroke="#5EEAD4" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>`;
 const SETTINGS_SVG = `<svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>`;
 const THEME_IDS = ["ink", "sepia", "mint", "contrast", "slate", "night"];
 const initTheme = THEME_IDS.includes(settings.theme) ? settings.theme : (Device.isUsingDarkAppearance() ? "night" : "ink");

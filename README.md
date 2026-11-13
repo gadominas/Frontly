@@ -1,7 +1,7 @@
 <!-- header:start: repo-site/tools/header.js writes this block from docs/site/header.json -->
 <div align="center">
 
-<a href="#install"><img src="docs/banner.png" width="100%" alt="Frontly: Answer. Note. Book. A patient calls a dental clinic, Reva the virtual receptionist asks the right questions and the front desk books the visit. Two iPhone screens show a live call with Reva's notes and the front desk queue, crossed by a teal voice line ending in a pink dot."></a>
+<a href="#install"><img src="docs/banner.png" width="100%" alt="Frontly: Answer. Note. Book. Someone calls the office, Reva the virtual receptionist asks the right questions and the front desk books the visit. Two iPhone screens show a live call with Reva's notes and the front desk queue, crossed by a teal voice line ending in a pink dot."></a>
 
 <h2>A virtual receptionist that screens every caller and leaves a note ready to book</h2>
 
@@ -43,7 +43,7 @@ Call the office. Answer Reva. Book the visit.
   <img src="docs/screenshots/06-patients.png" width="31%" alt="Patients grouped by status: three callers to book, each card with age, phone, urgency, why they called, visits, calls and mood">
 </p>
 <p align="center">
-  <img src="docs/screenshots/07-launch.png" width="31%" alt="The launch screen: a white tooth outline between two sound marks, a teal voice line and a pink dot, above Frontly and Answer. Note. Book.">
+  <img src="docs/screenshots/07-launch.png" width="31%" alt="The launch screen: a white speech bubble shaped like a calendar page, with a teal check mark and a pink dot, between two sound marks, above Frontly and Answer. Note. Book.">
   <img src="docs/screenshots/08-settings.png" width="31%" alt="Settings: Appearance with colours, layout, text size and font, then Calls with the language of the call and Reva's voice">
   <img src="docs/screenshots/09-ai-settings.png" width="31%" alt="AI settings: a Claude key in use with Claude Haiku 5.5, an OpenAI card without a key, and What AI does">
 </p>
