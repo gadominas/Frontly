@@ -102,6 +102,10 @@ Calls go through Twilio and ElevenLabs, and the transcript and collected details
 
 Tests: `node bridge/test.mjs` (Node 22) checks the lookup, the signature, replays, retries and the mapping.
 
+## Another kind of business
+
+The bridge works the same for every template in **Settings › Business**: the same variables and the same twelve data-collection identifiers. Only their meaning follows the business: for a car service, `location` is the car (make, model, year) and `age` and `pain` stay empty; for an office, `location` too. Copy Reva's instructions again from Frontly after switching, and in ElevenLabs reword the `complaint` and `location` descriptions to match ("what's wrong with the car", "the car: make, model and year").
+
 ## What Reva knows, and what reaches the front desk
 
 Frontly sends the bridge a short brief for each patient: name, age, number, the last visit, the **booked visits** (day, time, dentist), a **request still waiting** for the front desk, and a **message** the front desk wrote on the patient's page. Reva can tell a patient when their visit is and with whom, say the front desk already has their request, and pass the message on.

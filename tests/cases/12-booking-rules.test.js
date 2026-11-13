@@ -15,7 +15,7 @@ const planner = (system, user) => { plans.push(JSON.parse(user)); return { pick:
 scenario('booking rules', async (t) => {
   const app = await t.open({
     settings: { aiInvite: { off: true }, deskUser: 'Agnė Petrauskaitė', tab: 'desk' }, kc: { FRONTLY_ANTHROPIC_KEY: 'sk-ant-test' },
-    routes: ai({ answers: [[/plan dental appointments/, planner]] }),
+    routes: ai({ answers: [[/You plan appointments/, planner]] }),
     files: (h) => ({
       [h.path('patients.json')]: JSON.stringify([
         { id: 'p-martin', name: 'Martin Schreier', age: 41, phone: '+370 600 11111', since: h.now - 300 * 864e5, notes: [],

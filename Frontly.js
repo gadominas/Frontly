@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.4.1';
+const VERSION = '1.5.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -98,7 +98,8 @@ const DAY = 864e5;
 // Everything tunable lives here; the Settings screen edits these (stored in settings.cfg, defaults below).
 const CONFIG = [
   ["Clinic", [
-    { k: "clinicName", label: "Clinic name", help: "What Reva says when she answers", type: "text", def: "Northlight Dental" },
+    { k: "clinicName", label: "{Business} name", help: "What Reva says when she answers", type: "text", def: "Northlight Dental" },
+    { k: "city", label: "Where it is", help: "The town and country Reva can mention", type: "text", def: "Vilnius, Lithuania" },
     { k: "assistantName", label: "Receptionist's name", help: "The virtual receptionist's name", type: "text", def: "Reva" },
   ]],
   ["Calls", [
@@ -110,8 +111,8 @@ const CONFIG = [
   ["Booking", [
     { k: "daysAhead", label: "Days to offer", help: "How far ahead the front desk can book", unit: "days", def: 10, min: 3, max: 30, step: 1 },
     { k: "slotMinutes", label: "Appointment length", unit: "min", def: 30, min: 15, max: 60, step: 15 },
-    { k: "visitGapDays", label: "Days between a patient's visits", help: "0 allows two visits on one day (never at the same time); 1 keeps them on different days", unit: "days", def: 1, min: 0, max: 14, step: 1 },
-    { k: "surgeryGapDays", label: "Days between two surgeries", help: "Healing time before the same patient can have another surgery", unit: "days", def: 14, min: 0, max: 60, step: 1 },
+    { k: "visitGapDays", label: "Days between a {client}'s {visits}", help: "0 allows two visits on one day (never at the same time); 1 keeps them on different days", unit: "days", def: 1, min: 0, max: 14, step: 1 },
+    { k: "surgeryGapDays", only: "dental", label: "Days between two surgeries", help: "Healing time before the same patient can have another surgery", unit: "days", def: 14, min: 0, max: 60, step: 1 },
   ]],
   ["Widget", [
     { k: "widgetRefreshMin", label: "Ask iOS to refresh every", help: "iOS decides the exact timing", unit: "min", def: 30, min: 15, max: 240, step: 15 },
@@ -148,12 +149,116 @@ const PALETTES = {
   night:    { paper: "#05080a", sheet: "#0e1518", ink: "#f2f7f8", ink2: "#cfdade", muted: "#97a6ab", rule: "#1e2a2f", signal: "#6ee7d2", signalWash: "#0f2e2b", amber: "#f5c04a", amberWash: "#2d240c", danger: "#ff8f9e", scheme: "dark" },
 };
 
-// ---------- the demo clinic ----------
-// Specialties a call can be routed to, and the dentists who cover them. Made up for the demo.
-const SPECIALTIES = {
-  general: "General dentistry", endo: "Root canal and severe pain", surgery: "Oral surgery",
-  ortho: "Braces and aligners", hygiene: "Cleaning and check-ups", kids: "Children's dentistry",
+// ---------- the kind of business ----------
+// A template is everything that depends on the kind of business: the words for staff, clients and bookings, the
+// services a call is routed to (re: words in a call that point to it; the last one with no re catches the rest), what
+// Reva asks (ask, in order) with the script's questions in both languages, and the AI's wording. Dental is the demo
+// the phone bridge and Reva's ElevenLabs instructions were written for; its text is unchanged. Settings › Business
+// picks one and can rename the words and the services.
+const TEMPLATES = {
+  dental: {
+    label: "Dental clinic", kind: "a dental clinic",
+    words: { business: "clinic", staff: "dentist", staffs: "dentists", client: "patient", clients: "patients", visit: "visit", visits: "visits" },
+    staffName: "Dr. Rūta Kazlauskienė", staffShort: "Dr. Kazlauskienė", staffRole: "General dentist",
+    services: [
+      { k: "ortho", l: "Braces and aligners", re: "brace|bracket|aligner|breket|kapel" },
+      { k: "surgery", l: "Oral surgery", re: "wisdom|protin|extract|šalin|knocked|išmuš|broke|lūž|trauma|implant" },
+      { k: "endo", l: "Root canal and severe pain", re: "throb|pulsuo|root canal|nerv|hot|cold|karšt|šalt|abscess|pūli|night|naktį" },
+      { k: "hygiene", l: "Cleaning and check-ups", re: "clean|valym|check|patikr|whiten|balin|tartar|akmen" },
+      { k: "kids", l: "Children's dentistry", re: "child|son|daughter|kid|vaik|sūn|dukr" },
+      { k: "general", l: "General dentistry" },
+    ],
+    order: ["general", "endo", "surgery", "ortho", "hygiene", "kids"],   // how the services are listed
+    heals: "surgery",   // the service that needs time to heal between two visits (Settings › Booking)
+    ask: ["name", "age", "complaint", "location", "pain", "urgency", "preferred", "notes"],
+    labels: { complaint: "Reason", location: "Where", pain: "Pain" },
+    script: {},   // the dental questions are SCRIPT's own
+    collect: "the reason for the call, where it hurts (which tooth or side), the pain from 0 to 10, how urgent it feels to the caller from 1 (it can wait) to 5 (needs help today), the best time for a visit, and anything else that matters (swelling, fever, bleeding, medicines, allergies, pregnancy, a child as the patient)",
+    newWhat: "A new problem or a new visit", knownSkip: "Don't collect symptoms.",
+    care: "Be warm and empathetic and acknowledge pain, but stay brief. Never diagnose, never give treatment advice and never promise",
+    safety: "If the caller mentions trouble breathing or swallowing, swelling spreading towards the eye or neck, bleeding that won't stop or a serious injury, tell them to call 112 or go to the emergency room now",
+    fieldNote: "", flags: "red flags such as swelling, fever, bleeding, trauma; empty if none", planNote: " and leave time to heal after surgery",
+    emergency: "breath|swallow|kvėp|ryti|spreading|plint|to (my|the) eye|neck|akį|kakl|won'?t stop bleeding|nesustoja",
+    urgent: "swell|tin|fever|karšč|bleed|kraujav|broke|knocked|lūž|išmuš",
+    voice: "A warm, calm and professional dental clinic receptionist. Friendly, unhurried, reassuring.",
+  },
+  car: {
+    label: "Car service", kind: "a car service",
+    words: { business: "service", staff: "mechanic", staffs: "mechanics", client: "customer", clients: "customers", visit: "appointment", visits: "appointments" },
+    staffName: "Tomas Petraitis", staffShort: "Tomas", staffRole: "Mechanic",
+    services: [
+      { k: "brakes", l: "Brakes", re: "brake|stabd" },
+      { k: "tyres", l: "Tyres and wheels", re: "tyre|tire|padang|wheel|ratas|ratų|puncture|pradur|balanc" },
+      { k: "electric", l: "Electrics and battery", re: "battery|akumuliat|electric|elektr|won'?t start|neužsiveda|starter" },
+      { k: "diag", l: "Diagnostics and warning lights", re: "light|lemput|check engine|diagnos|error|klaid|noise|garsas|beldži|strange|keist" },
+      { k: "service", l: "Service and oil change", re: "service|servis|oil|tepal|filter|filtr|maintenance|aptarnav|inspection|apžiūr" },
+      { k: "body", l: "Bodywork and paint", re: "body|kėbul|dent|įlenk|scratch|įbrėž|paint|daž|rust|rūd|bumper|bamper" },
+      { k: "general", l: "Repairs" },
+    ],
+    order: ["general", "service", "diag", "brakes", "tyres", "electric", "body"],
+    heals: "",
+    ask: ["name", "complaint", "location", "urgency", "preferred", "notes"],
+    labels: { complaint: "Problem", location: "Car" },
+    script: {
+      en: { complaint: "What can we do for you? What's wrong with the car, or what does it need?",
+        location: "Which car is it: the make, the model and the year?",
+        urgency: "How urgent is it, from 1, it can wait, to 5, the car can't be driven?",
+        preferred: "When could you bring the car in? Which days, and morning or afternoon?",
+        notes: "Is there anything else the mechanic should know, like warning lights, noises, or the plate number?",
+        emergency: "One thing first: if the car is smoking or you smell fuel, move away from it, and if anyone is hurt, call 112." },
+      lt: { complaint: "Kuo galime padėti? Kas negerai su automobiliu arba ką reikia atlikti?",
+        location: "Koks tai automobilis: markė, modelis ir metai?",
+        urgency: "Kiek tai skubu, nuo 1, gali palaukti, iki 5, automobiliu negalima važiuoti?",
+        preferred: "Kada galėtumėte atvažiuoti? Kuriomis dienomis, ryte ar po pietų?",
+        notes: "Ar yra dar kas nors, ką meistras turėtų žinoti, pavyzdžiui, įsijungusios lemputės, garsai ar valstybinis numeris?",
+        emergency: "Svarbu: jei automobilis rūksta ar jaučiate degalų kvapą, pasitraukite nuo jo, o jei kas nors sužeistas, skambinkite 112." },
+    },
+    collect: "what's wrong with the car or what it needs, the car (make, model and year), whether it can still be driven, how urgent it feels to the caller from 1 (it can wait) to 5 (the car can't be driven), the best time to bring it in, and anything else that matters (warning lights, noises, the plate number)",
+    newWhat: "A new problem or a new appointment", knownSkip: "Don't ask about the car's problem.",
+    care: "Be friendly and practical, and stay brief. Never diagnose the fault, never quote prices or repair times and never promise",
+    safety: "If the caller mentions smoke, fire, a fuel smell, brakes that don't work or an accident with injuries, tell them to stop, move away from the car and call 112 if anyone is hurt",
+    fieldNote: " In fields, \"location\" is the car (make, model, year); \"age\" and \"pain\" stay null.", flags: "safety issues such as smoke, a fuel smell, failing brakes or a warning light; empty if none", planNote: "",
+    emergency: "fire|gaisr|smoke|dūm|fuel smell|degalų kvap|accident|avarij|injur|sužeist",
+    urgent: "brake|stabd|won'?t start|neužsiveda|overheat|perkait|leak|teka|warning light|lemput|can'?t drive|negaliu važiuoti",
+    voice: "A friendly, practical and efficient car service receptionist. Clear, upbeat, to the point.",
+  },
+  office: {
+    label: "Office or other service", kind: "an office",
+    words: { business: "office", staff: "employee", staffs: "employees", client: "client", clients: "clients", visit: "appointment", visits: "appointments" },
+    staffName: "Rūta Kazlauskienė", staffShort: "Rūta", staffRole: "Consultant",
+    services: [
+      { k: "consult", l: "Consultation", re: "consult|konsult|advice|patar|meeting|susitik" },
+      { k: "follow", l: "Follow-up", re: "follow|again|dar kart|tęs|second time|antrą" },
+      { k: "docs", l: "Documents and paperwork", re: "document|dokument|paper|form|sutart|contract|sign|pasiraš" },
+      { k: "general", l: "General enquiries" },
+    ],
+    order: ["general", "consult", "follow", "docs"],
+    heals: "",
+    ask: ["name", "complaint", "urgency", "preferred", "notes"],
+    labels: { complaint: "Reason" },
+    script: {
+      en: { complaint: "What can we help you with?",
+        urgency: "How urgent is it for you, from 1, it can wait, to 5, I need help today?",
+        preferred: "When would suit you best for an appointment? Which days, and morning or afternoon?",
+        notes: "Is there anything else we should know before your appointment?", emergency: "" },
+      lt: { complaint: "Kuo galime jums padėti?",
+        urgency: "Kiek tai skubu jums, nuo 1, gali palaukti, iki 5, pagalbos reikia šiandien?",
+        preferred: "Kada jums būtų patogiausia atvykti? Kuriomis dienomis, ryte ar po pietų?",
+        notes: "Ar yra dar kas nors, ką turėtume žinoti prieš susitikimą?", emergency: "" },
+    },
+    collect: "the reason for the call, how urgent it feels to the caller from 1 (it can wait) to 5 (needs help today), the best time for an appointment, and anything else that matters",
+    newWhat: "Something new or a new appointment", knownSkip: "Don't collect the other details.",
+    care: "Be friendly and professional, and stay brief. Never give advice on the matter and never promise",
+    safety: "",
+    fieldNote: " In fields, \"age\", \"location\" and \"pain\" stay null.", flags: "anything time-sensitive, such as a deadline; empty if none", planNote: "",
+    emergency: "", urgent: "urgent|skub|today|šiandien|deadline|termin",
+    voice: "A friendly, professional and efficient office receptionist. Clear and polite.",
+  },
 };
+const FIELD_LABELS = { name: "Name", age: "Age", complaint: "Reason", location: "Where", pain: "Pain", urgency: "Urgency", preferred: "Best time", notes: "Also" };
+const SPECIALTIES = {};   // the services, key → name (setBusiness)
+let BIZ = TEMPLATES.dental, WORDS = Object.assign({}, BIZ.words);
+const cap = w => String(w || "").charAt(0).toUpperCase() + String(w || "").slice(1);
 // The dentists a fresh clinic is offered nothing of: they are added in Settings › Dentists. These five are only kept
 // for an install that already booked visits with them (before dentists could be edited), so those visits stay valid.
 const DEFAULT_DOCTORS = [
@@ -173,10 +278,10 @@ function setDoctors() {
 // Settings › Dentists › Save: checks the form and adds or updates a dentist. Returns what's wrong, or "".
 function saveDoctor(x) {
   if (!x) return "Nothing to save";
-  const name = String(x.name || "").trim().slice(0, 60), role = String(x.role || "").trim().slice(0, 40) || "Dentist";
+  const name = String(x.name || "").trim().slice(0, 60), role = String(x.role || "").trim().slice(0, 40) || cap(WORDS.staff);
   const spec = [...new Set((x.spec || []).filter(k => SPECIALTIES[k]))], days = [...new Set((x.days || []).map(Number).filter(d => d >= 0 && d <= 6))].sort();
   const from = Math.round(Number(x.from)), to = Math.round(Number(x.to));
-  if (name.length < 2) return "Add the dentist's name";
+  if (name.length < 2) return `Add the ${WORDS.staff}'s name`;
   if (!spec.length) return "Pick at least one kind of work";
   if (!days.length) return "Pick at least one working day";
   if (!(from >= 5 && to <= 23 && from < to)) return "Working hours: the start must come before the end";
@@ -193,7 +298,7 @@ function removeDoctor(id) {
   const d = (settings.doctors || []).find(x => x.id === id);
   if (!d) return "";
   const up = patients.reduce((n, p) => n + (p.appts || []).filter(a => a.doctor === id && a.status === "booked" && a.at > Date.now()).length, 0);
-  if (up) return `${d.short} has ${up} visit${up === 1 ? "" : "s"} booked. Move or cancel ${up === 1 ? "it" : "them"} first`;
+  if (up) return `${d.short} has ${up} ${up === 1 ? WORDS.visit : WORDS.visits} booked. Move or cancel ${up === 1 ? "it" : "them"} first`;
   if (patients.some(p => (p.appts || []).some(a => a.doctor === id)) || calls.some(c => c.booking && c.booking.doctor === id)) d.archived = true;
   else settings.doctors = settings.doctors.filter(x => x.id !== id);
   setDoctors();
@@ -210,14 +315,14 @@ function visitConflict(appts, at, spec, o) {
     if (a.id && a.id === o.ignore) continue;
     const live = a.status === "booked", dd = Math.round(Math.abs(day(a.at) - day(at)) / 864e5), with_ = o.docName(a.doctor);
     if (live && Math.abs(a.at - at) < o.slotMin * 60e3) return `Already booked at ${hm(a.at)} with ${with_}`;
-    if (live && o.gapDays > 0 && dd < o.gapDays) return dd === 0 ? `Already has a visit that day: ${hm(a.at)} with ${with_}` : `Less than ${o.gapDays} days from the visit on ${date(a.at)}`;
+    if (live && o.gapDays > 0 && dd < o.gapDays) return dd === 0 ? `Already has a ${o.visit || "visit"} that day: ${hm(a.at)} with ${with_}` : `Less than ${o.gapDays} days from the ${o.visit || "visit"} on ${date(a.at)}`;
     if ((live || a.status === "done") && spec === "surgery" && o.specOf(a) === "surgery" && dd < o.surgeryDays)
       return `Within ${o.surgeryDays} days of the surgery on ${date(a.at)}: time to heal`;
   }
   return "";
 }
 const ruleOpts = (ignore) => ({ slotMin: cfg("slotMinutes"), gapDays: cfg("visitGapDays"), surgeryDays: cfg("surgeryGapDays"), ignore,
-  specOf: a => a.spec || ((ALL_DOCTORS.find(d => d.id === a.doctor) || {}).spec || [])[0], docName: id => (ALL_DOCTORS.find(d => d.id === id) || {}).short || "the dentist" });
+  specOf: a => a.spec || ((ALL_DOCTORS.find(d => d.id === a.doctor) || {}).spec || [])[0], docName: id => (ALL_DOCTORS.find(d => d.id === id) || {}).short || "the " + WORDS.staff, visit: WORDS.visit });
 const DESK_STAFF = ["Agnė Petrauskaitė", "Mantas Jonaitis"];
 const DEMO_PIN = "1234";
 const MOODS = { calm: "🙂", cheerful: "😊", worried: "😟", anxious: "😰", "in pain": "😣", frustrated: "😤", upset: "😢", unsure: "😐" };
@@ -315,6 +420,26 @@ const settings = Object.assign(
   await load("settings", {})
 );
 const settingsOk = !loadIssues.includes("settings");   // settings that were never read are never saved over
+// The kind of business (Settings › Business): its template, the words as renamed, the services as edited
+function setBusiness() {
+  BIZ = TEMPLATES[settings.business] || TEMPLATES.dental;
+  const own = settings.words && typeof settings.words === "object" ? settings.words : {};
+  WORDS = Object.assign({}, BIZ.words);
+  for (const k of Object.keys(BIZ.words)) if (typeof own[k] === "string" && own[k].trim()) WORDS[k] = own[k].trim().slice(0, 30);
+  const list = Array.isArray(settings.services) && settings.services.length ? settings.services : BIZ.order.map(k => BIZ.services.find(x => x.k === k));
+  for (const k of Object.keys(SPECIALTIES)) delete SPECIALTIES[k];
+  list.forEach(x => { if (x && x.k && x.l) SPECIALTIES[x.k] = String(x.l).slice(0, 40); });
+}
+setBusiness();
+// Settings › Business: another kind of business brings its own words and services; staff keep what still exists
+function switchBusiness(v) {
+  if (!TEMPLATES[v]) return;
+  settings.business = v; delete settings.words; delete settings.services;
+  setBusiness();
+  const keys = Object.keys(SPECIALTIES), fallback = SPECIALTIES.general ? "general" : keys[0];
+  (settings.doctors || []).forEach(d => { d.spec = (d.spec || []).filter(k => SPECIALTIES[k]); if (!d.spec.length) d.spec = [fallback]; });
+  setDoctors();
+}
 
 function saveAll(touchSession = true) {
   if (touchSession && dataLoaded) settings.lastSession = Date.now();
@@ -450,7 +575,7 @@ function parseJSON(txt) {
 
 // ---------- Reva's voice and ears: OpenAI's speech and transcription endpoints (Claude's API has neither) ----------
 const TTS_LEGACY_VOICES = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"];   // all tts-1 and tts-1-hd can use
-const TTS_DEFAULT_INSTR = "A warm, calm and professional dental clinic receptionist. Friendly, unhurried, reassuring.";
+const TTS_DEFAULT_INSTR = () => BIZ.voice;   // how the AI voice sounds, by kind of business (dental: unchanged)
 async function aiSpeech(text) {
   const key = keyFor("openai");
   if (!key) throw new Error("The AI voice needs an OpenAI key");
@@ -458,7 +583,7 @@ async function aiSpeech(text) {
   let voice = settings.ttsVoice || "coral";
   if (legacy && !TTS_LEGACY_VOICES.includes(voice)) voice = "coral";
   const body = { model, voice, input: String(text).slice(0, 4096), response_format: "mp3" };
-  if (!legacy) body.instructions = String(settings.ttsInstructions || TTS_DEFAULT_INSTR).slice(0, 500);
+  if (!legacy) body.instructions = String(settings.ttsInstructions || TTS_DEFAULT_INSTR()).slice(0, 500);
   const r = new Request("https://api.openai.com/v1/audio/speech");
   r.method = "POST"; r.timeoutInterval = 60;
   r.headers = { "Authorization": "Bearer " + key, "Content-Type": "application/json" };
@@ -622,8 +747,9 @@ function numIn(text, min, max) {
   if (n == null) for (const w of t.split(/[^a-ząčęėįšųūž]+/)) if (w in NUM_WORDS) { n = NUM_WORDS[w]; break; }
   return n != null && n >= min && n <= max ? n : null;
 }
-const RED_FLAGS = /(breath|swallow|kvėp|ryti|spreading|plint|eye|neck|akis|kakl|won'?t stop|nesustoja|fever|karšč|temperat|knocked out|išmuš|swell|tin)/i;
-const EMERGENCY = /(breath|swallow|kvėp|ryti|spreading|plint|to (my|the) eye|neck|akį|kakl|won'?t stop bleeding|nesustoja)/i;
+// The business's own questions over the dental script; an emergency pattern only where the business has one
+const scriptFor = lang => Object.assign({}, SCRIPT[lang] || SCRIPT.en, (BIZ.script || {})[lang] || {});
+const isEmergency = t => !!BIZ.emergency && new RegExp("(" + BIZ.emergency + ")", "i").test(t);
 function cleanName(t) {
   return String(t || "").replace(/^(hi|hello|hey|yes|labas|sveiki|taip)[,.!\s]+/i, "")
     .replace(/^(my name is|my name's|this is|it'?s|i am|i'm|mano vardas( yra)?|aš esu|čia)\s+/i, "")
@@ -640,7 +766,7 @@ function newCall(phone) {
     mood: null, moods: [], status: "live", step: pt ? "confirm" : "name", asked: {}, warned: false, turns: 0, deskNotes: [],
   };
   live[id] = c;
-  const S = SCRIPT[c.lang], clinic = cfg("clinicName"), a = cfg("assistantName");
+  const S = scriptFor(c.lang), clinic = cfg("clinicName"), a = cfg("assistantName");
   const say = pt ? S.helloKnown(clinic, a, firstName(pt.name)) : S.hello(clinic, a);   // the greeting is instant: no AI wait
   c.transcript.push({ who: "reva", t: say, at: Date.now() });
   return { c, line: { say, fields: c.fields, mood: null, done: false } };
@@ -648,9 +774,9 @@ function newCall(phone) {
 
 // The scripted receptionist: store the answer to the last question, then ask for the next missing detail.
 function scriptTurn(c, text) {
-  const S = SCRIPT[c.lang], f = c.fields, pt = c.patientId && patients.find(p => p.id === c.patientId);
+  const S = scriptFor(c.lang), f = c.fields, pt = c.patientId && patients.find(p => p.id === c.patientId);
   let pre = "";
-  if (!c.warned && EMERGENCY.test(text)) { c.warned = true; pre = S.emergency + " "; }
+  if (!c.warned && S.emergency && isEmergency(text)) { c.warned = true; pre = S.emergency + " "; }
   switch (c.step) {
     case "confirm":
       if (/\b(no|nope|not|ne|nė)\b/i.test(text)) { c.patientId = null; c.isNew = true; c.step = "name"; return { say: pre + S.who }; }
@@ -663,25 +789,24 @@ function scriptTurn(c, text) {
     default: if (FIELD_KEYS.includes(c.step)) f[c.step] = String(text).trim().slice(0, 300) || null;
   }
   c.asked[c.step] = 1;
-  const next = ["name", "age", "complaint", "location", "pain", "urgency", "preferred", "notes"].find(k => !c.asked[k] && (f[k] == null || f[k] === ""));
+  const next = BIZ.ask.find(k => !c.asked[k] && (f[k] == null || f[k] === ""));   // the business's questions, in its order
   if (!next) { c.step = "done"; return { say: pre + S.bye(firstName(f.name)), done: true }; }
   c.step = next;
   return { say: pre + (next === "age" ? S.age(firstName(f.name)) : S[next]) };
 }
 
 const REVA_SYSTEM = (c) => {
-  const a = cfg("assistantName"), clinic = cfg("clinicName");
-  return `You are ${a}, the virtual receptionist of ${clinic}, a dental clinic in Vilnius, Lithuania. You are on a phone call with a caller.
+  const a = cfg("assistantName"), clinic = cfg("clinicName"), age = BIZ.ask.includes("age");
+  return `You are ${a}, the virtual receptionist of ${clinic}, ${BIZ.kind} in ${cfg("city")}. You are on a phone call with a caller.
 Speak ${LANG_NAME[c.lang]}. Keep every reply short: one or two spoken sentences, one question at a time. No lists, no markdown, no emoji: your words are read aloud.
-Collect for the front desk: the caller's full name, their age, the reason for the call, where it hurts (which tooth or side), the pain from 0 to 10, how urgent it feels to the caller from 1 (it can wait) to 5 (needs help today), the best time for a visit, and anything else that matters (swelling, fever, bleeding, medicines, allergies, pregnancy, a child as the patient).
-If the caller is a known patient (see "patient"), confirm it's them by first name, don't ask for their name or age again, and refer to their history naturally when it helps.
-Be warm and empathetic and acknowledge pain, but stay brief. Never diagnose, never give treatment advice and never promise an exact appointment time: the front desk will call back to confirm.
-If the caller mentions trouble breathing or swallowing, swelling spreading towards the eye or neck, bleeding that won't stop or a serious injury, tell them to call 112 or go to the emergency room now, then finish the call.
-When you have everything, or the caller wants to stop, or you have reached max_turns, say a short goodbye that says the front desk will call back, and set done to true.
+Collect for the front desk: the caller's full name, ${age ? "their age, " : ""}${BIZ.collect}.
+If the caller is a known ${WORDS.client} (see "patient"), confirm it's them by first name, don't ask for their name${age ? " or age" : ""} again, and refer to their history naturally when it helps.
+${BIZ.care} an exact appointment time: the front desk will call back to confirm.
+${BIZ.safety ? BIZ.safety + ", then finish the call.\n" : ""}When you have everything, or the caller wants to stop, or you have reached max_turns, say a short goodbye that says the front desk will call back, and set done to true.
 Judge the caller's mood from what they say and how they say it.
 Reply with JSON only, nothing else:
 {"say": "your next words", "fields": {"name": string|null, "age": number|null, "complaint": string|null, "location": string|null, "pain": number|null, "urgency": number|null, "preferred": string|null, "notes": string|null}, "mood": {"label": "calm|cheerful|worried|anxious|in pain|frustrated|upset|unsure", "score": -2 to 2}, "done": true|false}
-In fields give everything known so far, null when unknown, written in English.`;
+In fields give everything known so far, null when unknown, written in English.${BIZ.fieldNote}`;
 };
 function patientBrief(pt) {
   if (!pt) return null;
@@ -734,25 +859,24 @@ async function callTurn(c, text) {
       out = scriptTurn(c, text);
     }
   } else out = scriptTurn(c, text);
-  if (!out.done && c.turns >= cfg("maxTurns")) out = { say: SCRIPT[c.lang].bye(firstName(c.fields.name)), done: true };
+  if (!out.done && c.turns >= cfg("maxTurns")) out = { say: scriptFor(c.lang).bye(firstName(c.fields.name)), done: true };
   c.transcript.push({ who: "reva", t: out.say, at: Date.now() });
   return { say: out.say, done: !!out.done, fields: c.fields, mood: c.mood, fellBack };
 }
 
 // ---------- after the call: a note for the front desk ----------
 function triageOf(f, text) {
-  if (EMERGENCY.test(text)) return "emergency";
-  if ((f.pain || 0) >= 8 || (f.urgency || 0) >= 5 || /(swell|tin|fever|karšč|bleed|kraujav|broke|knocked|lūž|išmuš)/i.test(text)) return "urgent";
+  if (isEmergency(text)) return "emergency";
+  if ((f.pain || 0) >= 8 || (f.urgency || 0) >= 5 || (BIZ.urgent && new RegExp("(" + BIZ.urgent + ")", "i").test(text))) return "urgent";
   if ((f.pain || 0) >= 5 || (f.urgency || 0) >= 4) return "soon";
   return "routine";
 }
+// Which service a call is about: the template's words for its services, then the name of a service added in Settings
 function specialtyOf(text) {
-  if (/(brace|bracket|aligner|breket|kapel)/i.test(text)) return "ortho";
-  if (/(wisdom|protin|extract|šalin|knocked|išmuš|broke|lūž|trauma|implant)/i.test(text)) return "surgery";
-  if (/(throb|pulsuo|root canal|nerv|hot|cold|karšt|šalt|abscess|pūli|night|naktį)/i.test(text)) return "endo";
-  if (/(clean|valym|check|patikr|whiten|balin|tartar|akmen)/i.test(text)) return "hygiene";
-  if (/(child|son|daughter|kid|vaik|sūn|dukr)/i.test(text)) return "kids";
-  return "general";
+  for (const x of BIZ.services) if (x.re && SPECIALTIES[x.k] && new RegExp("(" + x.re + ")", "i").test(text)) return x.k;
+  const t = String(text || "").toLowerCase();
+  for (const [k, l] of Object.entries(SPECIALTIES)) if (String(l).toLowerCase().split(/[^a-ząčęėįšųūž]+/).some(w => w.length >= 4 && t.includes(w))) return k;
+  return SPECIALTIES.general ? "general" : Object.keys(SPECIALTIES)[0] || "general";
 }
 const doctorFor = spec => DOCTORS.find(d => d.spec[0] === spec) || DOCTORS.find(d => d.spec.includes(spec)) || DOCTORS[0];
 const PRIORITY = { emergency: 5, urgent: 4, soon: 3, routine: 2 };
@@ -760,30 +884,33 @@ function templateSummary(c) {
   const f = c.fields, all = c.transcript.filter(x => x.who === "caller").map(x => x.t).join(" ") + " " + (f.complaint || "") + " " + (f.notes || "");
   const triage = triageOf(f, all), spec = specialtyOf(all), doc = doctorFor(spec) || { id: "", short: "" };
   const bits = [
-    `${c.isNew ? "New caller" : "Existing patient"} ${f.name || "(name not given)"}${f.age ? ", " + f.age : ""}.`,
+    `${c.isNew ? "New caller" : "Existing " + WORDS.client} ${f.name || "(name not given)"}${f.age ? ", " + f.age : ""}.`,
     f.complaint ? `${f.complaint}${f.location ? " (" + f.location + ")" : ""}.` : "No reason given.",
     [f.pain != null ? `Pain ${f.pain}/10` : "", f.urgency != null ? `urgency ${f.urgency}/5` : ""].filter(Boolean).join(", ") + (f.pain != null || f.urgency != null ? "." : ""),
     f.preferred ? `Prefers ${f.preferred}.` : "", f.notes && !/^(no|nope|ne|nothing|nieko)\b/i.test(f.notes) ? `Also: ${f.notes}.` : "",
   ].filter(Boolean);
   const flags = [];
-  if (EMERGENCY.test(all)) flags.push("Possible emergency signs");
-  if (/(swell|tin)/i.test(all)) flags.push("Swelling");
-  if (/(fever|karšč|temperat)/i.test(all)) flags.push("Fever");
-  if (/(bleed|kraujav)/i.test(all)) flags.push("Bleeding");
+  if (isEmergency(all)) flags.push(BIZ === TEMPLATES.car ? "Possible danger" : "Possible emergency signs");
+  if (BIZ === TEMPLATES.dental) {
+    if (/(swell|tin)/i.test(all)) flags.push("Swelling");
+    if (/(fever|karšč|temperat)/i.test(all)) flags.push("Fever");
+    if (/(bleed|kraujav)/i.test(all)) flags.push("Bleeding");
+  }
+  if (BIZ === TEMPLATES.car && /(won'?t start|neužsiveda|can'?t drive|negaliu važiuoti|tow|evakuat)/i.test(all)) flags.push("Can't be driven");
   return { kind: "template", text: bits.join(" "), triage, priority: PRIORITY[triage], specialty: spec, doctor: doc.id,
     reason: String(f.complaint || "Call back").split(/\s+/).slice(0, 6).join(" "), flags, hint: [f.preferred ? f.preferred.slice(0, 40) : "", doc.short].filter(Boolean).join(" · ") };
 }
 async function aiSummary(c) {
   const pt = c.patientId && patients.find(p => p.id === c.patientId);
-  const sys = `You write call notes for the front desk of a dental clinic. The receptionist reads them to book the right dentist. Be factual and brief; never invent details. Reply with JSON only.`;
+  const sys = `You write call notes for the front desk of ${BIZ.kind}. The receptionist reads them to book the right ${WORDS.staff}. Be factual and brief; never invent details. Reply with JSON only.`;
   const user = JSON.stringify({
     caller_phone: c.phone, new_caller: c.isNew, patient: patientBrief(pt), details: c.fields,
     call: c.transcript.map(x => (x.who === "reva" ? "Receptionist" : "Caller") + ": " + x.t),
-    specialties: SPECIALTIES, dentists: DOCTORS.map(d => ({ id: d.id, name: d.name, role: d.role, covers: d.spec })),
+    specialties: SPECIALTIES, [WORDS.staffs]: DOCTORS.map(d => ({ id: d.id, name: d.name, role: d.role, covers: d.spec })),
     reply_as: {
       summary: "2 to 3 sentences in English for the receptionist: who, what, how bad, when they can come",
       reason: "the reason in at most 6 words", triage: "emergency | urgent | soon | routine", priority: "1 to 5, 5 is most urgent",
-      specialty: "one specialty id", doctor: "the best dentist id", flags: ["red flags such as swelling, fever, bleeding, trauma; empty if none"],
+      specialty: "one specialty id", doctor: `the best ${WORDS.staff} id`, flags: [BIZ.flags],
       hint: "a booking suggestion in at most 12 words", mood: { label: "calm|cheerful|worried|anxious|in pain|frustrated|upset|unsure", score: "-2 to 2", note: "at most 8 words on how the caller sounded" },
       fields: "the details object, corrected from the call, in English",
       intent: "why they called: new_visit (a new problem or a new visit), about_visit (a question about a visit already booked, such as when or with whom), change_visit (move or cancel a booked visit) or other",
@@ -855,7 +982,7 @@ function patientsBrief() {
     const history = [last ? `Last visit ${d(last)}: ${last.reason}` : "", next ? `Booked ${d(next)}: ${next.reason}` : ""].filter(Boolean).join(". ");
     const when = t => new Date(t).toLocaleString("en-GB", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
     const appointments = (p.appts || []).filter(a => a.status === "booked" && a.at > Date.now()).sort((a, b) => a.at - b.at)
-      .map(a => { const doc = docById(a.doctor) || {}; return `${when(a.at)} with ${doc.name || "a dentist"}${doc.role ? " (" + doc.role + ")" : ""}: ${a.reason || "visit"}`; }).join("; ");
+      .map(a => { const doc = docById(a.doctor) || {}; return `${when(a.at)} with ${doc.name || "a " + WORDS.staff}${doc.role ? " (" + doc.role + ")" : ""}: ${a.reason || "visit"}`; }).join("; ");
     const w = calls.find(c => c.patientId === p.id && c.status === "waiting");
     const waiting = w ? `${(w.summary || {}).reason || (w.fields || {}).complaint || "a request"}, from ${when(w.at)}; the front desk will call back to book it` : "";
     return { name: p.name, age: p.age || null, phone: p.phone, history, appointments, waiting, message: p.message ? p.message.text : "", messageId: p.message ? p.message.id : "" };
@@ -946,26 +1073,25 @@ async function syncLine(manual) {
   push(); call("onLine", false);
 }
 // Reva's instructions for the ElevenLabs agent, with the variables the bridge fills in when a call starts.
-const PHONE_PROMPT = () => `You are ${cfg("assistantName")}, the virtual receptionist of ${cfg("clinicName")}, a dental clinic in Vilnius, Lithuania. You answer real phone calls.
+const PHONE_PROMPT = () => { const W = WORDS, age = BIZ.ask.includes("age"); return `You are ${cfg("assistantName")}, the virtual receptionist of ${cfg("clinicName")}, ${BIZ.kind} in ${cfg("city")}. You answer real phone calls.
 Start in {{call_language}}: the bridge picks it from the caller's number (+370 Lithuanian, +371 Latvian, other countries English). If the caller answers in another of these three languages, switch to theirs. Keep every reply short: one or two spoken sentences, one question at a time.
 
 What you know about the caller:
-Known patient: {{patient_known}}. Name: {{patient_name}}. Age: {{patient_age}}. History: {{patient_history}}.
-Booked visits: {{patient_appointments}}.
+Known ${W.client}: {{patient_known}}. Name: {{patient_name}}.${age ? " Age: {{patient_age}}." : ""} History: {{patient_history}}.
+Booked ${W.visits}: {{patient_appointments}}.
 A request waiting for the front desk: {{patient_waiting}}.
-A message from the front desk for this patient: {{patient_message}}.
-If the patient is known, confirm it's them by first name and don't ask for their name or age again.
+A message from the front desk for this ${W.client}: {{patient_message}}.
+If the ${W.client} is known, confirm it's them by first name and don't ask for their name${age ? " or age" : ""} again.
 
 Find out first why they are calling, then do only what that needs:
-1. A question about a visit already booked (when, what time, which dentist): answer from Booked visits: the day, the time and the dentist's name. Don't collect symptoms.
-2. To move or cancel a booked visit: ask which visit and what they would like instead. You can't change bookings yourself: the front desk will call back.
-3. A new problem or a new visit: collect the reason for the call, where it hurts (which tooth or side), the pain from 0 to 10, how urgent it feels to the caller from 1 (it can wait) to 5 (needs help today), the best time for a visit, and anything else that matters (swelling, fever, bleeding, medicines, allergies, pregnancy, a child as the patient). A new caller also gives their full name and age.
+1. A question about a ${W.visit} already booked (when, what time, which ${W.staff}): answer from Booked ${W.visits}: the day, the time and the ${W.staff}'s name. ${BIZ.knownSkip}
+2. To move or cancel a booked ${W.visit}: ask which ${W.visit} and what they would like instead. You can't change bookings yourself: the front desk will call back.
+3. ${BIZ.newWhat}: collect ${BIZ.collect}. A new caller also gives their full name${age ? " and age" : ""}.
 If a request is already waiting, tell them the front desk has it and will call back, and add anything new they tell you.
-If there is a message from the front desk (not "none"), pass it on once you know you're speaking with the patient, in the caller's language, and make sure they understood it.
+If there is a message from the front desk (not "none"), pass it on once you know you're speaking with the ${W.client}, in the caller's language, and make sure they understood it.
 
-Be warm and empathetic and acknowledge pain, but stay brief. Never diagnose, never give treatment advice and never promise an exact time for a new visit: the front desk will call back to confirm.
-If the caller mentions trouble breathing or swallowing, swelling spreading towards the eye or neck, bleeding that won't stop or a serious injury, tell them to call 112 or go to the emergency room now, then end the call.
-When you're done, or the caller wants to stop, say a short goodbye (mention the call back only if the front desk needs to call) and end the call.`;
+${BIZ.care} an exact time for a new ${W.visit}: the front desk will call back to confirm.
+${BIZ.safety ? BIZ.safety + ", then end the call.\n" : ""}When you're done, or the caller wants to stop, say a short goodbye (mention the call back only if the front desk needs to call) and end the call.`; };
 
 // ---------- front desk ----------
 function bookCall(m) {
@@ -1020,13 +1146,13 @@ async function aiPlan(m) {
   if (!cands.length) throw new Error("No free times to choose from");
   const when = t => new Date(t).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
   const s = c.summary || {}, f = c.fields || {}, move = pt && m.move && (pt.appts || []).find(a => a.id === m.move);
-  const sys = `You plan dental appointments for a clinic's front desk. Choose the best time from the candidates only. Weigh how urgent it is, what the caller asked for, the right dentist, and the patient's other visits: keep visits apart, and leave time to heal after surgery. Be brief and practical. Reply with JSON only.`;
+  const sys = `You plan appointments for the front desk of ${BIZ.kind}. Choose the best time from the candidates only. Weigh how urgent it is, what the caller asked for, the right ${WORDS.staff}, and the ${WORDS.client}'s other ${WORDS.visits}: keep them apart${BIZ.planNote}. Be brief and practical. Reply with JSON only.`;
   const user = JSON.stringify({
     today: when(Date.now()),
-    request: { summary: s.text, reason: s.reason, triage: s.triage, priority: s.priority, specialty: SPECIALTIES[s.specialty] || s.specialty, preferred_time: f.preferred, notes: f.notes, moving_the_visit_on: move ? when(move.at) : null },
-    patient_visits: pt ? (pt.appts || []).filter(a => a.at > Date.now() - 120 * DAY).map(a => ({ when: when(a.at), dentist: (docById(a.doctor) || {}).name, specialty: SPECIALTIES[ruleOpts().specOf(a)], reason: a.reason, status: a.status })) : [],
-    clinic_rules: { days_between_visits: cfg("visitGapDays"), days_between_surgeries: cfg("surgeryGapDays") },
-    candidates: cands.map((x, i) => ({ i, when: when(+x.at), dentist: docById(x.doctor).name, role: docById(x.doctor).role, matches_caller_preference: !!x.pref })),
+    request: { summary: s.text, reason: s.reason, triage: s.triage, priority: s.priority, service: SPECIALTIES[s.specialty] || s.specialty, preferred_time: f.preferred, notes: f.notes, moving_the_visit_on: move ? when(move.at) : null },
+    patient_visits: pt ? (pt.appts || []).filter(a => a.at > Date.now() - 120 * DAY).map(a => ({ when: when(a.at), with: (docById(a.doctor) || {}).name, service: SPECIALTIES[ruleOpts().specOf(a)] || ruleOpts().specOf(a), reason: a.reason, status: a.status })) : [],
+    rules: Object.assign({ days_between_visits: cfg("visitGapDays") }, BIZ.heals ? { days_between_surgeries: cfg("surgeryGapDays") } : {}),
+    candidates: cands.map((x, i) => ({ i, when: when(+x.at), with: docById(x.doctor).name, role: docById(x.doctor).role, matches_caller_preference: !!x.pref })),
     reply_as: { pick: "the i of the best candidate", why: "one or two sentences for the receptionist", warnings: ["anything to check with the patient before booking; empty if none"], alternatives: ["up to two other i, best first"] },
   });
   const j = parseJSON(await aiCall(sys, user, 600, "plan", settings.aiProvider));
@@ -1041,7 +1167,9 @@ async function aiPlan(m) {
 function clientState() {
   return {
     patients, calls: calls.slice(0, 200),
-    doctors: DOCTORS, allDoctors: ALL_DOCTORS, specialties: SPECIALTIES, staff: DESK_STAFF, demoPin: DEMO_PIN, moods: MOODS,
+    doctors: DOCTORS, allDoctors: ALL_DOCTORS, specialties: SPECIALTIES, words: WORDS, business: settings.business || "dental",
+    templates: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { label: t.label, words: t.words, staffName: t.staffName, staffShort: t.staffShort, staffRole: t.staffRole }])),
+    ask: BIZ.ask, fieldLabels: Object.assign({}, FIELD_LABELS, BIZ.labels), customised: !!(settings.services || settings.words), staff: DESK_STAFF, demoPin: DEMO_PIN, moods: MOODS,
     clinic: cfg("clinicName"), assistant: cfg("assistantName"),
     ai: {
       provider: settings.aiProvider,
@@ -1054,7 +1182,7 @@ function clientState() {
     settings: {
       ai: settings.ai, aiProvider: settings.aiProvider, hasKey: !!aiKey(), hasOpenAI: !!keyFor("openai"), checkUpdates: settings.checkUpdates !== false,
       lang: settings.lang === "lt" ? "lt" : "en", sttEngine: settings.sttEngine || "dictation", speechEngine: settings.speechEngine || "ai", handsFree: settings.handsFree !== false,
-      ttsModel: settings.ttsModel || "gpt-4o-mini-tts", ttsVoice: settings.ttsVoice || "coral", ttsInstructions: settings.ttsInstructions || "", ttsDefaultInstr: TTS_DEFAULT_INSTR, voiceURI: settings.voiceURI || "", noDictation: settings.noDictation || {},
+      ttsModel: settings.ttsModel || "gpt-4o-mini-tts", ttsVoice: settings.ttsVoice || "coral", ttsInstructions: settings.ttsInstructions || "", ttsDefaultInstr: TTS_DEFAULT_INSTR(), voiceURI: settings.voiceURI || "", noDictation: settings.noDictation || {},
       deskUser: settings.deskUser || "", tab: settings.tab || "call", callFrom: settings.callFrom || "", patGroup: settings.patGroup || "status",
       theme: settings.theme, density: settings.density, font: settings.font, textSize: settings.textSize,
     },
@@ -1169,18 +1297,40 @@ async function handle(m) {
     case "data-clear": {
       if (!dataLoaded) return;
       patients = []; calls = [];
-      saveAll(); saveWidget(widgetSnapshot()); toast("All calls and patients removed");
+      saveAll(); saveWidget(widgetSnapshot()); toast(`All calls and ${WORDS.clients} removed`);
       return push();
     }
+    case "business": switchBusiness(m.v); saveAll(); toast(`Set up for a ${TEMPLATES[settings.business].label.toLowerCase()}`); return push();
+    case "words": {
+      if (!(m.k in BIZ.words)) return;
+      settings.words = Object.assign({}, settings.words, { [m.k]: String(m.v || "").trim().slice(0, 30) });
+      if (!settings.words[m.k]) delete settings.words[m.k];
+      setBusiness(); saveAll(); return push();
+    }
+    case "svc-add": {
+      const l = String(m.l || "").trim().slice(0, 40);
+      if (!l) return;
+      if (Object.values(SPECIALTIES).some(x => x.toLowerCase() === l.toLowerCase())) { toast(`“${l}” is already there`); return; }
+      settings.services = Object.entries(SPECIALTIES).map(([k, x]) => ({ k, l: x })).concat({ k: "s-" + Date.now().toString(36), l });
+      setBusiness(); saveAll(); toast(`Added “${l}”`); return push();
+    }
+    case "svc-remove": {
+      const left = Object.entries(SPECIALTIES).filter(([k]) => k !== m.k);
+      if (!left.length) { toast("Keep at least one service"); return; }
+      settings.services = left.map(([k, l]) => ({ k, l }));
+      (settings.doctors || []).forEach(d => { d.spec = (d.spec || []).filter(k => k !== m.k); if (!d.spec.length) d.spec = [left[0][0]]; });
+      setBusiness(); setDoctors(); saveAll(); return push();
+    }
+    case "svc-reset": delete settings.services; delete settings.words; setBusiness(); saveAll(); toast("Words and services as the template has them"); return push();
     case "doctor-save": {
       const err = saveDoctor(m.doctor);
       if (err) { toast(err); return call("__done", m.req, false, err); }
-      saveAll(); toast("Dentist saved"); push(); return call("__done", m.req, true, "");
+      saveAll(); toast(`${cap(WORDS.staff)} saved`); push(); return call("__done", m.req, true, "");
     }
     case "doctor-remove": {
       const err = removeDoctor(m.id);
       if (err) { toast(err); return push(); }
-      saveAll(); toast("Dentist removed"); return push();
+      saveAll(); toast(`${cap(WORDS.staff)} removed`); return push();
     }
     // ── shared: settings, AI, updates ──
     case "set":
@@ -1262,6 +1412,9 @@ function clientApp() {
   const cfgChanged = k => { const d = cfgItem(k); return d && JSON.stringify(S.cfg[k]) !== JSON.stringify(d.def); };
   const fmtCfg = (d, v) => d.step && d.step < 1 ? Number(v).toFixed(String(d.step).split(".")[1].length) : String(v);
   const $ = s => document.querySelector(s);
+  // The business's words (Settings › Business): word("staff") → "dentist", word("Staffs") → "Dentists"; "{client}" in a text
+  const word = k => { const lc = k.charAt(0).toLowerCase() + k.slice(1), v = (S.words || {})[lc] || lc; return k.charAt(0) === lc.charAt(0) ? v : v.charAt(0).toUpperCase() + v.slice(1); };
+  const wd = t => String(t).replace(/\{(\w+)\}/g, (m, k) => (S.words || {})[k.charAt(0).toLowerCase() + k.slice(1)] ? word(k) : m);
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const DAY = 864e5;
 
@@ -1336,21 +1489,36 @@ function clientApp() {
       : `<small class="muted wrap">No ${lang === "lt" ? "Lithuanian" : "English"} voices were found. Add one in iOS Settings › Accessibility › Spoken Content › Voices.</small>`}
       <button class="sm" data-act="voicetest">Hear Reva</button></div>`;
   }
-  // Settings › Dentists: the list, and one dentist's form at a time
+  // Settings › Staff: the list, and one person's form at a time
   let dent = null, dentErr = "", dentArmed = "";
   const DAYS_L = [[1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"], [5, "Fri"], [6, "Sat"], [0, "Sun"]];
   const daysText = ds => DAYS_L.filter(([d]) => ds.includes(d)).map(([, l]) => l).join(", ");
+  const tplNow = () => (S.templates || {})[S.business] || {};
+  function businessHTML() {
+    const t = tplNow(), own = (k) => S.words[k] !== (t.words || {})[k];
+    const pair = (k1, k2, label) => `<div class="cfg"><div class="cfg-h"><b>${label}</b></div><div class="wpair">
+        <input class="cfgin wide wordin" data-k="${k1}" value="${esc(S.words[k1])}" placeholder="${esc((t.words || {})[k1])}" aria-label="${label}: one" autocomplete="off" autocapitalize="off">
+        <input class="cfgin wide wordin" data-k="${k2}" value="${esc(S.words[k2])}" placeholder="${esc((t.words || {})[k2])}" aria-label="${label}: more than one" autocomplete="off" autocapitalize="off"></div></div>`;
+    return `<div class="cfg"><div class="cfg-h"><b>Kind of business</b></div><small class="muted">Sets the words, the services and what ${esc(S.assistant)} asks callers. Changing it resets your own words and services.</small>
+        <select id="bizsel" class="voicesel bizsel wide" aria-label="Kind of business">${Object.entries(S.templates || {}).map(([k, x]) => `<option value="${k}" ${k === S.business ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select></div>
+      ${pair("staff", "staffs", "Your staff are called")}${pair("client", "clients", "Callers are called")}${pair("visit", "visits", "Bookings are called")}
+      <div class="cfg"><div class="cfg-h"><b>The place is called</b></div><input class="cfgin wordin wide" data-k="business" value="${esc(S.words.business)}" placeholder="${esc((t.words || {}).business)}" aria-label="The place is called" autocomplete="off" autocapitalize="off"></div>
+      <div class="cfg"><div class="cfg-h"><b>Services</b></div><small class="muted">What callers come for. Each ${word("staff")} picks theirs; ${esc(S.assistant)}'s note suggests one.</small>
+        <div class="chips svc">${Object.entries(S.specialties).map(([k, l]) => `<span class="chip svc-c">${esc(l)}<button class="svc-x" data-act="svcdel" data-v="${esc(k)}" aria-label="Remove ${esc(l)}">×</button></span>`).join("")}</div>
+        <div class="svc-add"><input id="svcnew" class="cfgin wide" placeholder="Add a service" autocomplete="off"><button class="sm" data-act="svcadd">Add</button></div></div>
+      ${S.customised ? `<div class="srow"><div class="grow"><b>Back to the template's words and services</b></div><button class="sm" data-act="svcreset">Reset</button></div>` : ""}`;
+  }
   function dentistsHTML() {
     const rows = S.doctors.map(d => dent && dent.id === d.id ? dentForm() : `<div class="srow"><div class="grow"><b>${esc(d.name)}</b><small class="muted wrap">${esc(d.role)} · ${esc(daysText(d.days))} · ${pad2(d.from)}:00–${pad2(d.to)}:00</small></div><button class="sm" data-act="dentedit" data-id="${esc(d.id)}">Edit</button></div>`).join("");
-    return `${rows || `<p class="muted pad-s">No dentists yet. Add each dentist with their working days and hours; bookings and the calendar use them.</p>`}
-      ${dent && !dent.id ? dentForm() : `<div class="srow"><div class="grow"><b>Add a dentist</b></div><button class="sm primary" data-act="dentnew">Add</button></div>`}`;
+    return `${rows || `<p class="muted pad-s">No ${word("staffs")} yet. Add each ${word("staff")} with their working days and hours; bookings and the calendar use them.</p>`}
+      ${dent && !dent.id ? dentForm() : `<div class="srow"><div class="grow"><b>Add a ${word("staff")}</b></div><button class="sm primary" data-act="dentnew">Add</button></div>`}`;
   }
   function dentForm() {
     const d = dent, opt = (v, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${pad2(v)}:00</option>`, hrs = []; for (let h = 5; h <= 23; h++) hrs.push(h);
-    return `<div class="dform" role="group" aria-label="${d.id ? "Edit dentist" : "New dentist"}">
-      <label class="lbl-s" for="dn">Full name</label><input id="dn" class="cfgin wide" value="${esc(d.name)}" placeholder="Dr. Rūta Kazlauskienė" autocomplete="off">
-      <label class="lbl-s" for="ds">Short name <span class="muted">(on cards and the calendar)</span></label><input id="ds" class="cfgin wide" value="${esc(d.short)}" placeholder="Dr. Kazlauskienė" autocomplete="off">
-      <label class="lbl-s" for="dr">Role</label><input id="dr" class="cfgin wide" value="${esc(d.role)}" placeholder="General dentist" autocomplete="off">
+    return `<div class="dform" role="group" aria-label="${d.id ? "Edit " + word("staff") : "New " + word("staff")}">
+      <label class="lbl-s" for="dn">Full name</label><input id="dn" class="cfgin wide" value="${esc(d.name)}" placeholder="${esc(tplNow().staffName)}" autocomplete="off">
+      <label class="lbl-s" for="ds">Short name <span class="muted">(on cards and the calendar)</span></label><input id="ds" class="cfgin wide" value="${esc(d.short)}" placeholder="${esc(tplNow().staffShort)}" autocomplete="off">
+      <label class="lbl-s" for="dr">Role</label><input id="dr" class="cfgin wide" value="${esc(d.role)}" placeholder="${esc(tplNow().staffRole)}" autocomplete="off">
       <span class="lbl-s">Does</span><div class="chips">${Object.entries(S.specialties).map(([k, l]) => `<button class="chip ${d.spec.includes(k) ? "on" : ""}" data-act="dentspec" data-v="${k}" aria-pressed="${d.spec.includes(k)}">${esc(l)}</button>`).join("")}</div>
       <span class="lbl-s">Works on</span><div class="chips">${DAYS_L.map(([n, l]) => `<button class="chip ${d.days.includes(n) ? "on" : ""}" data-act="dentday" data-v="${n}" aria-pressed="${d.days.includes(n)}">${l}</button>`).join("")}</div>
       <div class="dhours"><label class="lbl-s" for="dfrom">From</label><select id="dfrom" class="voicesel dsel">${hrs.map(h => opt(h, d.from)).join("")}</select>
@@ -1370,7 +1538,7 @@ function clientApp() {
     const field = d => {
       const v = S.cfg[d.k], ch = cfgChanged(d.k);
       const reset = ch ? `<button class="link small" data-act="cfgreset" data-k="${d.k}">Reset</button>` : "";
-      const head = `<div class="cfg-h"><b>${esc(d.label)}</b>${reset}</div>${d.help ? `<small class="muted">${esc(d.help)}</small>` : ""}`;
+      const head = `<div class="cfg-h"><b>${esc(wd(d.label))}</b>${reset}</div>${d.help ? `<small class="muted">${esc(wd(d.help))}</small>` : ""}`;
       if (d.type === "text") return `<div class="cfg ${ch ? "ch" : ""}">${head}<input class="cfgin wide" data-k="${d.k}" value="${esc(v)}" autocorrect="off" spellcheck="false"></div>`;
       if (d.type === "lines") return `<div class="cfg ${ch ? "ch" : ""}">${head}<textarea class="cfgin wide" data-k="${d.k}" rows="${Math.max(4, v.length + 1)}">${esc(v.join("\n"))}</textarea></div>`;
       return `<div class="cfg ${ch ? "ch" : ""}">${head}
@@ -1392,10 +1560,11 @@ function clientApp() {
         <button class="sm ${st.hasKey ? "" : "primary"}" data-act="aiopen">AI settings</button></div>
       <h3 class="sec">Front desk</h3>
       <div class="srow"><div class="grow"><b>${st.deskUser ? "Signed in as " + esc(st.deskUser) : "Not signed in"}</b><small class="muted wrap">The receptionist's view of the calls Reva took</small></div>${st.deskUser ? `<button class="sm" data-act="signout">Sign out</button>` : `<button class="sm" data-act="gotab" data-v="desk">Sign in</button>`}</div>
-      <h3 class="sec" id="dentists">Dentists</h3>${dentistsHTML()}
+      <h3 class="sec" id="business">Business</h3>${businessHTML()}
+      <h3 class="sec" id="dentists">${word("Staffs")}</h3>${dentistsHTML()}
       <h3 class="sec">Phone line</h3>${lineHTML()}
       <h3 class="sec">Data</h3>
-      <div class="srow"><div class="grow"><b>Remove all calls and patients</b><small class="muted wrap">Starts the front desk empty. Dentists and settings stay.</small></div><button class="sm danger ${demoArmed ? "armed" : ""}" data-act="demoreset">${demoArmed ? "Confirm" : "Remove all"}</button></div>
+      <div class="srow"><div class="grow"><b>Remove all calls and ${word("clients")}</b><small class="muted wrap">Starts the front desk empty. ${word("Staffs")} and settings stay.</small></div><button class="sm danger ${demoArmed ? "armed" : ""}" data-act="demoreset">${demoArmed ? "Confirm" : "Remove all"}</button></div>
       <h3 class="sec">Updates</h3>
       ${S.nativeShell
         ? `<div class="srow"><div class="grow"><b>Updates</b><small class="muted wrap">You have Frontly ${esc(S.version)}. New versions come through the App Store (or TestFlight).</small></div></div>`
@@ -1403,7 +1572,7 @@ function clientApp() {
       <div class="srow"><div class="grow"><b>Check for updates now</b><small id="updmsg" class="muted wrap" aria-live="polite"></small></div><button class="sm" data-act="updcheck">Check</button></div>`}
       <div class="srow"><div class="grow"><b>Start-up log</b><small class="muted wrap">What happened the last times Frontly opened</small></div><button class="sm" data-act="startlog">Show</button></div>
       <pre id="startlog" class="startlog" hidden></pre>
-      ${S.cfgSchema.map(sec => `<h3 class="sec">${esc(sec.title)}</h3>${sec.items.map(field).join("")}`).join("")}
+      ${S.cfgSchema.map(sec => `<h3 class="sec">${esc(sec.title)}</h3>${sec.items.filter(d => !d.only || d.only === S.business).map(field).join("")}`).join("")}
       <div class="aic-btns cfg-foot"><span class="note">${changed ? changed + " setting" + (changed === 1 ? "" : "s") + " changed" : "All settings are at their original values"}</span>
         ${changed ? `<button class="sm danger ${cfgArmed ? "armed" : ""}" data-act="cfgall">${cfgArmed ? "Confirm reset" : "Reset all"}</button>` : ""}</div>
       ${builtWithHTML()}
@@ -1423,7 +1592,7 @@ function clientApp() {
       <div class="srow"><div class="grow"><b>Token</b><small class="muted wrap">${tok ? "Saved, ending …" + esc(tok) : "Not set"}. The bridge's APP_TOKEN, kept in the Keychain.</small></div>
         <button class="sm" data-act="secret-set" data-v="bridge">${tok ? "Change" : "Add"}</button>${tok ? `<button class="sm danger ${secArmed === "bridge" ? "armed" : ""}" data-act="secret-remove" data-v="bridge">${secArmed === "bridge" ? "Confirm" : "Remove"}</button>` : `<button class="sm" data-act="line-token-new">Make one</button>`}</div>
       <div class="srow"><div class="grow"><b>Status</b><small id="linemsg" class="muted wrap ${last && !last.ok ? "err" : ""}">${esc(status)}</small></div>${L.on ? `<button class="sm" data-act="line-sync">${L.busy ? "Checking…" : "Check now"}</button>` : ""}</div>
-      <div class="srow"><div class="grow"><b>Reva's instructions</b><small class="muted wrap">The system prompt for the ElevenLabs agent that answers the real number, with the patient details the bridge fills in</small></div><button class="sm" data-act="line-prompt">Copy</button></div>`;
+      <div class="srow"><div class="grow"><b>Reva's instructions</b><small class="muted wrap">The system prompt for the ElevenLabs agent that answers the real number, with the ${word("client")} details the bridge fills in</small></div><button class="sm" data-act="line-prompt">Copy</button></div>`;
   }
   let aiOpen = false, aiArmed = null; const aiLoading = new Set();
   const PN = { anthropic: "Claude", openai: "OpenAI", elevenlabs: "ElevenLabs" };
@@ -1472,7 +1641,7 @@ function clientApp() {
       <p class="hint">Keys stay in this iPhone's Keychain. Only the provider marked “In use” runs the conversation.</p>
       ${card("anthropic")}${card("openai")}
       <h3 class="sec">What AI does</h3>
-      <div class="srow"><div class="grow"><b>Write a note when a call ends</b><small class="muted wrap">One request per call: summary, urgency, mood and the right dentist. Off: the note is put together without AI. Reva's conversation itself uses AI while you talk.</small></div><button class="switch ${S.settings.ai ? "on" : ""}" data-act="toggle" data-v="ai" aria-label="Write a note when a call ends"></button></div>
+      <div class="srow"><div class="grow"><b>Write a note when a call ends</b><small class="muted wrap">One request per call: summary, urgency, mood and the right ${word("staff")}. Off: the note is put together without AI. Reva's conversation itself uses AI while you talk.</small></div><button class="switch ${S.settings.ai ? "on" : ""}" data-act="toggle" data-v="ai" aria-label="Write a note when a call ends"></button></div>
       <h3 class="sec">Token usage</h3>
       ${used.length ? used.map(p => usageBlock(p, A.usage.p[p])).join("") : `<p class="muted pad">No AI requests yet.</p>`}
       ${used.length ? `<div class="aic-btns"><span class="note">Counting since ${new Date(A.usage.since).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</span>
@@ -1709,7 +1878,9 @@ function clientApp() {
   // ── the call ──
   // K is the call on screen. phase: ring, reva (speaking), idle (waiting for the caller), listen, think, ending, saved
   let K = { on: false };
-  const FIELD_ROWS = [["name", "Name"], ["age", "Age"], ["complaint", "Reason"], ["location", "Where"], ["pain", "Pain"], ["urgency", "Urgency"], ["preferred", "Best time"], ["notes", "Also"]];
+  // The details a call collects, as this business names and asks them (only the asked ones, plus any that came in)
+  const FIELD_ROWS_ALL = ["name", "age", "complaint", "location", "pain", "urgency", "preferred", "notes"];
+  const fieldRows = (f) => FIELD_ROWS_ALL.filter(k => (S.ask || FIELD_ROWS_ALL).includes(k) || (f && f[k] != null && f[k] !== "")).map(k => [k, (S.fieldLabels || {})[k] || k]);
   const canRecord = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
   // iPhone dictation, unless this language has none on the iPhone: then OpenAI transcription, or typing without an OpenAI key
   const dictationOk = () => !(S.settings.noDictation || {})[S.settings.lang];
@@ -1747,7 +1918,7 @@ function clientApp() {
     if (S.settings.handsFree) setTimeout(() => { if (K.on && K.phase === "idle") listen(); }, (S.cfg.listenDelay || 0) * 1000);
   }
   function setFields(f, mood) {
-    if (f) for (const [k] of FIELD_ROWS) if (f[k] != null && f[k] !== "" && f[k] !== K.fields[k]) { K.fields[k] = f[k]; K.fresh[k] = Date.now(); }
+    if (f) for (const k of FIELD_ROWS_ALL) if (f[k] != null && f[k] !== "" && f[k] !== K.fields[k]) { K.fields[k] = f[k]; K.fresh[k] = Date.now(); }
     if (mood) { if (!K.mood || K.mood.label !== mood.label) K.fresh.mood = Date.now(); K.mood = mood; }
   }
   function listen() {
@@ -1893,10 +2064,10 @@ function clientApp() {
     const now = Date.now(), fresh = k => K.fresh[k] && now - K.fresh[k] < 1800 ? "fresh" : "";
     const known = K.patient;
     return `<div class="intake" aria-label="What ${esc(S.assistant)} has noted">
-      <div class="in-h"><b>${esc(S.assistant)}'s notes</b><span>${known ? "Patient record found" : K.id ? "New caller" : ""}</span></div>
+      <div class="in-h"><b>${esc(S.assistant)}'s notes</b><span>${known ? word("Client") + " record found" : K.id ? "New caller" : ""}</span></div>
       <div class="in-row"><span class="in-l">Phone</span><span class="in-v">${esc(K.phone)}${known ? ` <em class="tag ok">✓ ${esc(known.name)}</em>` : ""}</span></div>
       ${K.engine === "ai" ? `<div class="in-row ${K.mood ? "has" : ""} ${fresh("mood")}"><span class="in-l">Mood</span><span class="in-v">${K.mood ? `${S.moods[K.mood.label] || ""} ${esc(K.mood.label)} <em class="tag ai">✦ AI</em>` : `<i class="in-wait"></i>`}</span></div>` : ""}
-      ${FIELD_ROWS.map(([k, l]) => { const v = fieldVal(k, K.fields[k]); return `<div class="in-row ${v ? "has" : ""} ${fresh(k)}"><span class="in-l">${l}</span><span class="in-v">${v || `<i class="in-wait"></i>`}</span></div>`; }).join("")}
+      ${fieldRows(K.fields).map(([k, l]) => { const v = fieldVal(k, K.fields[k]); return `<div class="in-row ${v ? "has" : ""} ${fresh(k)}"><span class="in-l">${l}</span><span class="in-v">${v || `<i class="in-wait"></i>`}</span></div>`; }).join("")}
     </div>`;
   }
   function savedHTML() {
@@ -1905,7 +2076,7 @@ function clientApp() {
     const s = c.summary || {};
     return `<div class="c-saved">
       <h3>${c.status === "waiting" ? "Ready for the front desk" : "The call ended"}</h3>
-      <p class="muted">${mmss(c.dur || 0)} · ${c.isNew ? "new patient record made" : "added to the patient's record"}</p>
+      <p class="muted">${mmss(c.dur || 0)} · ${c.isNew ? "new " + word("client") + " record made" : "added to the " + word("client") + "'s record"}</p>
       ${s.text ? `<div class="sumbox">${s.kind === "ai" ? `<span class="badge-ai">✦ AI note by ${PN[s.provider] || "AI"}</span>` : `<span class="badge-ex">Note · no AI</span>`}
         <p>${esc(s.text)}</p><div class="chips">${triagePill(s.triage)}${c.mood ? `<span class="pill">${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}</div></div>` : ""}
       <button class="primary block" data-act="callsee" data-id="${esc(c.id)}">Open it as the receptionist</button>
@@ -1947,7 +2118,7 @@ function clientApp() {
   const triagePill = t => t ? `<span class="pill tri-${esc(t)}">${TRIAGE_L[t] || esc(t)}</span>` : "";
   const initials = n => String(n || "?").trim().split(/\s+/).slice(0, 2).map(w => w.charAt(0)).join("").toUpperCase();
   const callName = c => (c.fields && c.fields.name) || ((byPatient(c.patientId) || {}).name) || c.phone;
-  const tabs = () => [["call", "Call"], ["desk", "Front desk"], ["patients", "Patients"], ["cal", "Calendar"]];
+  const tabs = () => [["call", "Call"], ["desk", "Front desk"], ["patients", word("Clients")], ["cal", "Calendar"]];
   function setTab(v) {
     if (!["call", "desk", "patients", "cal"].includes(v)) return;
     tab = v; send("set", { k: "tab", v }); render(); scrollTo(0, 0);
@@ -1980,7 +2151,7 @@ function clientApp() {
       <p class="hero-p">${esc(S.assistant)}, the virtual receptionist, picks up, asks what's wrong, how much it hurts and when you can come, then leaves a note the front desk can book from.</p>
       <h3 class="lbl-s">Calling from</h3>
       <div class="from" role="radiogroup" aria-label="Calling from">
-        ${known.map(p => `<button class="from-r ${sel === p.phone ? "on" : ""}" role="radio" aria-checked="${sel === p.phone}" data-act="from" data-v="${esc(p.phone)}"><span class="av">${esc(initials(p.name))}</span><span class="grow"><b>${esc(p.name)}</b><small>${esc(p.phone)} · patient</small></span></button>`).join("")}
+        ${known.map(p => `<button class="from-r ${sel === p.phone ? "on" : ""}" role="radio" aria-checked="${sel === p.phone}" data-act="from" data-v="${esc(p.phone)}"><span class="av">${esc(initials(p.name))}</span><span class="grow"><b>${esc(p.name)}</b><small>${esc(p.phone)} · ${esc(word("client"))}</small></span></button>`).join("")}
         <div class="from-r ${sel === "new" ? "on" : ""}" role="radio" aria-checked="${sel === "new"}" data-act="from" data-v="new"><span class="av new">+</span><span class="grow"><b>A new caller</b><input id="newnum" type="tel" value="${esc(newNumber)}" aria-label="New caller's number" autocomplete="off"></span></div>
       </div>
       <div class="engine">${st.hasKey
@@ -1997,7 +2168,7 @@ function clientApp() {
   }
   const statusPill = c => `<span class="pill st-${esc(c.status)}">${{ waiting: "To book", booked: "Booked", closed: "Closed", noted: "No booking" }[c.status] || esc(c.status)}</span>`;
   // Why the call came in, as the front desk reads it
-  const INTENT_L = { about_visit: "Asked about a visit", change_visit: "Change a booking", other: "Question" };
+  const INTENT_L = new Proxy({}, { get: (_, k) => ({ about_visit: "Asked about a " + word("visit"), change_visit: "Change a booking", other: "Question" })[k] });
   const intentPill = c => c.followUp ? `<span class="pill soft">↩ Called again</span>` : INTENT_L[c.intent] ? `<span class="pill soft">${INTENT_L[c.intent]}</span>` : "";
 
   // Front desk: sign in, then the queue
@@ -2006,7 +2177,7 @@ function clientApp() {
     const st = S.settings;
     if (!st.deskUser) return `<section class="hero desk-in">
       <h2 class="hero-h">Front desk</h2>
-      <p class="hero-p">Sign in as the clinic's receptionist to see the calls ${esc(S.assistant)} took and book each caller with the right dentist.</p>
+      <p class="hero-p">Sign in as the ${esc(word("business"))}'s receptionist to see the calls ${esc(S.assistant)} took and book each caller with the right ${esc(word("staff"))}.</p>
       <label class="lbl-s" for="dwho">Receptionist</label>
       <select id="dwho" class="voicesel">${S.staff.map(n => `<option>${esc(n)}</option>`).join("")}</select>
       <label class="lbl-s" for="dpin">PIN</label>
@@ -2039,7 +2210,7 @@ function clientApp() {
     return `<div class="qgroup" role="group" aria-label="${esc(callName(c0))}: ${g.length} calls">
       <span class="stripe tri-${esc(top)}"></span>
       <div class="qg-head"><b class="q-name">${esc(callName(c0))}${(pt.age || f.age) ? `<small>, ${esc(pt.age || f.age)}</small>` : ""}</b>
-        <span class="chips"><span class="pill warn">${g.length} calls</span>${up.length ? `<span class="pill">${up.length} visit${up.length === 1 ? "" : "s"} booked</span>` : ""}${pt.id ? `<button class="link small" data-act="openpat" data-id="${esc(pt.id)}">Patient ›</button>` : ""}</span></div>
+        <span class="chips"><span class="pill warn">${g.length} calls</span>${up.length ? `<span class="pill">${up.length} ${up.length === 1 ? esc(word("visit")) : esc(word("visits"))} booked</span>` : ""}${pt.id ? `<button class="link small" data-act="openpat" data-id="${esc(pt.id)}">${esc(word("Client"))} ›</button>` : ""}</span></div>
       ${up.length ? `<div class="qg-visits">${up.map(a => `<span class="q-bk">📅 ${esc(dayLabel(a.at))} ${hhmm(a.at)} · ${esc((docOf(a.doctor) || {}).short || "")} · ${esc(a.reason || "")}</span>`).join("")}</div>` : ""}
       ${g.map(c => { const s = c.summary || {}; return `<button class="qrow" data-act="opencase" data-id="${esc(c.id)}">
         <span class="q-top">${c.status === "noted" ? statusPill(c) : triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞</span>` : ""}${intentPill(c)}<span class="q-when">${esc(rel(c.at))}</span></span>
@@ -2052,7 +2223,7 @@ function clientApp() {
     const s = c.summary || {}, f = c.fields || {}, bk = c.booking;
     return `<button class="qcard" data-act="opencase" data-id="${esc(c.id)}">
       <span class="stripe tri-${esc(s.triage || "routine")}"></span>
-      <span class="q-top">${c.status === "noted" ? statusPill(c) : triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Phone</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}${intentPill(c)}${(c.again || []).length ? `<span class="pill warn">Called ${c.again.length + 1}×</span>` : ""}<span class="q-when">${esc(rel(c.at))}</span></span>
+      <span class="q-top">${c.status === "noted" ? statusPill(c) : triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Phone</span>` : ""}${c.isNew ? `<span class="pill">New ${esc(word("client"))}</span>` : ""}${intentPill(c)}${(c.again || []).length ? `<span class="pill warn">Called ${c.again.length + 1}×</span>` : ""}<span class="q-when">${esc(rel(c.at))}</span></span>
       <b class="q-name">${esc(callName(c))}${f.age ? `<small>, ${esc(f.age)}</small>` : ""}</b>
       <span class="q-why">${esc(s.reason || f.complaint || "No reason given")}</span>
       <span class="chips">${f.pain != null ? `<span class="pill">Pain ${esc(f.pain)}/10</span>` : ""}${f.urgency != null ? `<span class="pill">Urgency ${esc(f.urgency)}/5</span>` : ""}${c.mood ? `<span class="pill">${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}</span>` : ""}${f.preferred ? `<span class="pill soft">${esc(clip(f.preferred, 34))}</span>` : ""}</span>
@@ -2092,7 +2263,7 @@ function clientApp() {
     const mv = moveId && (pt.appts || []).find(a => a.id === moveId), doc = docOf(docId) || {};
     const spec = (mv && specOfAppt(mv)) || (c.summary || {}).specialty || (doc.spec || [])[0];
     const o = { slotMin: S.cfg.slotMinutes || 30, gapDays: S.cfg.visitGapDays == null ? 1 : S.cfg.visitGapDays, surgeryDays: S.cfg.surgeryGapDays == null ? 14 : S.cfg.surgeryGapDays,
-      ignore: moveId || "", specOf: specOfAppt, docName: id => (docOf(id) || {}).short || "the dentist" };
+      ignore: moveId || "", specOf: specOfAppt, docName: id => (docOf(id) || {}).short || "the " + word("staff"), visit: word("visit") };
     return t => visitConflict(pt.appts, t, spec, o);
   }
   // The dentists for this call, the one the note suggests (or the moved visit's) first
@@ -2191,7 +2362,7 @@ function clientApp() {
     }
     if (c.status === "noted") {
       const w = c.followUp && byCall(c.followUp);
-      return `<div class="booked closed"><b>${w ? "Called again about a request that's waiting" : "No booking needed"}</b><span class="muted">${w ? `The request from ${esc(rel(w.at))} has this call too.` : c.intent === "about_visit" ? `${esc(S.assistant)} answered a question about a booked visit.` : "A question; filed under the patient."}</span>
+      return `<div class="booked closed"><b>${w ? "Called again about a request that's waiting" : "No booking needed"}</b><span class="muted">${w ? `The request from ${esc(rel(w.at))} has this call too.` : c.intent === "about_visit" ? `${esc(S.assistant)} answered a question about a booked ${esc(word("visit"))}.` : `A question; filed under the ${esc(word("client"))}.`}</span>
         <div class="aic-btns">${w ? `<button class="sm" data-act="opencase" data-id="${esc(w.id)}">Open the waiting request</button>` : ""}<button class="sm" data-act="reopen" data-id="${esc(c.id)}">Move to To book</button></div></div>`;
     }
     if (c.status === "closed") return `<div class="booked closed"><b>Closed without booking</b><span class="muted">${c.closedBy ? "by " + esc(c.closedBy) : ""}</span><div class="aic-btns"><button class="sm" data-act="reopen" data-id="${esc(c.id)}">Reopen</button></div></div>`;
@@ -2207,17 +2378,17 @@ function clientApp() {
     const pl = c.plan && (c.plan.move || "") === caseMove ? c.plan : null;
     const reasons = [...new Set(sl.filter(x => x.free && x.why).map(x => x.why))];
     return `<div class="bk">
-      ${mv || up.length && c.intent === "change_visit" ? `<label class="lbl-s" for="bkmove">Visit to move</label>
-        <select id="bkmove" class="voicesel bkmove"><option value="">None: book a new visit</option>${up.map(a => `<option value="${esc(a.id)}" ${a.id === caseMove ? "selected" : ""}>${esc(dayLabel(a.at))}, ${hhmm(a.at)} · ${esc((docOf(a.doctor) || {}).short || "")} · ${esc(a.reason || "")}</option>`).join("")}</select>` : ""}
+      ${mv || up.length && c.intent === "change_visit" ? `<label class="lbl-s" for="bkmove">${esc(word("Visit"))} to move</label>
+        <select id="bkmove" class="voicesel bkmove"><option value="">None: book a new ${esc(word("visit"))}</option>${up.map(a => `<option value="${esc(a.id)}" ${a.id === caseMove ? "selected" : ""}>${esc(dayLabel(a.at))}, ${hhmm(a.at)} · ${esc((docOf(a.doctor) || {}).short || "")} · ${esc(a.reason || "")}</option>`).join("")}</select>` : ""}
       ${up.length && !mv ? `<p class="note">📅 Already booked: ${up.map(a => `${esc(dayLabel(a.at))} ${hhmm(a.at)} with ${esc((docOf(a.doctor) || {}).short || "")}`).join("; ")}</p>` : ""}
       ${caseSug ? `<div class="sug"><p><span class="sug-k">Suggested</span> <b>${tLabel(caseSug.doctor, caseSug.at)}</b><small>${esc(caseSug.why)}</small></p>${caseSlot === caseSug.at && caseDoc === caseSug.doctor ? `<span class="sug-on">✓ Selected</span>` : ok(caseSug.doctor, caseSug.at) ? `<button class="sm" data-act="usetime" data-v="${esc(caseSug.doctor)}|${caseSug.at}">Use</button>` : ""}</div>` : ""}
       ${pl ? `<div class="sug ai"><p><span class="sug-k">✦ AI plan · ${esc(PN[pl.provider] || "AI")}</span> <b>${tLabel(pl.doctor, pl.at)}</b><small>${esc(pl.why)}</small>
           ${pl.warnings.map(w => `<small class="sug-w">⚠ ${esc(w)}</small>`).join("")}
           ${pl.alts.length ? `<span class="sug-alt">Or: ${pl.alts.map(x => ok(x.doctor, x.at) ? `<button class="link small" data-act="usetime" data-v="${esc(x.doctor)}|${x.at}">${tLabel(x.doctor, x.at)}</button>` : "").join(" ")}</span>` : ""}</p>
           ${!ok(pl.doctor, pl.at) ? `<span class="muted">No longer free</span>` : caseSlot === pl.at && caseDoc === pl.doctor ? `<span class="sug-on">✓ Selected</span>` : `<button class="sm" data-act="usetime" data-v="${esc(pl.doctor)}|${pl.at}">Use</button>`}</div>`
-        : S.settings.ai && S.settings.hasKey ? `<button class="link small" data-act="planai" data-id="${esc(c.id)}" ${planBusy[c.id] ? "disabled" : ""}>${planBusy[c.id] ? "✦ Planning…" : "✦ Ask AI to plan this visit"}</button>` : ""}
+        : S.settings.ai && S.settings.hasKey ? `<button class="link small" data-act="planai" data-id="${esc(c.id)}" ${planBusy[c.id] ? "disabled" : ""}>${planBusy[c.id] ? "✦ Planning…" : "✦ Ask AI to plan this " + esc(word("visit"))}</button>` : ""}
       ${s.hint ? `<p class="bk-hint">${s.kind === "ai" ? "✦ " : ""}${esc(s.hint)}</p>` : ""}
-      <label class="lbl-s" for="bkdoc">Dentist</label>
+      <label class="lbl-s" for="bkdoc">${esc(word("Staff"))}</label>
       <select id="bkdoc" class="voicesel bkdoc">${docs.map(d => `<option value="${esc(d.id)}" ${d.id === doc.id ? "selected" : ""}>${esc(d.name)} · ${esc(d.role)}${d.id === s.doctor ? " (suggested)" : ""}</option>`).join("")}</select>
       <div class="days" role="tablist" aria-label="Day">${days.map(d => { const x = slotsFor(doc, d, rule), n = x.filter(usable).length, blocked = !n && x.some(y => y.free && y.why); return `<button class="day ${d === caseDay ? "on" : ""}" data-act="bkday" data-v="${d}" ${n ? "" : "disabled"}><small>${esc(new Date(d).toLocaleDateString(undefined, { weekday: "short" }))}</small><b>${new Date(d).getDate()}</b><i>${n ? n + " free" : blocked ? "not allowed" : "full"}</i></button>`; }).join("")}</div>
       <div class="slots">${sl.length ? sl.map(x => `<button class="slot ${x.at === caseSlot ? "on" : ""} ${usable(x) && prefOk(pf, x.at) ? "pref" : ""} ${x.free && x.why ? "rule" : ""}" data-act="bkslot" data-v="${x.at}" ${usable(x) ? "" : "disabled"} ${x.why ? `title="${esc(x.why)}"` : ""}>${hhmm(x.at)}</button>`).join("") : `<p class="muted">No times left on this day.</p>`}</div>
@@ -2236,21 +2407,21 @@ function clientApp() {
     el.innerHTML = `<div class="sh-head"><h2>${esc(callName(c))}</h2><button class="link" data-act="caseclosesheet">Done</button></div><div class="sh-body">
       <div class="sumbox">${s.kind === "ai" ? `<span class="badge-ai">✦ AI note by ${PN[s.provider] || "AI"}</span>` : `<span class="badge-ex">Note · no AI</span>`}
         <p class="sum-t">${esc(s.text || "")}</p>
-        <div class="chips">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Real phone call</span>` : ""}${s.priority ? `<span class="pill">Priority ${esc(s.priority)}/5</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}${c.isNew ? `<span class="pill">New patient</span>` : ""}${intentPill(c)}</div>
+        <div class="chips">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Real phone call</span>` : ""}${s.priority ? `<span class="pill">Priority ${esc(s.priority)}/5</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}${c.isNew ? `<span class="pill">New ${esc(word("client"))}</span>` : ""}${intentPill(c)}</div>
         ${(c.again || []).length ? `<p class="note">↩ Called again ${c.again.map(id => byCall(id)).filter(Boolean).map(x => esc(rel(x.at))).join(", ")}: ${c.again.map(id => byCall(id)).filter(Boolean).map(x => `<button class="link small" data-act="opencase" data-id="${esc(x.id)}">read</button>`).join(" ")}</p>` : ""}
         ${c.delivered ? `<p class="note">✉ ${esc(S.assistant)} passed on the front desk's message: “${esc(c.delivered)}”</p>` : ""}
         ${(s.flags || []).length ? `<div class="chips">${s.flags.map(x => `<span class="pill flag">⚠ ${esc(x)}</span>`).join("")}</div>` : ""}
       </div>
       <h3 class="sec2">Booking</h3>${bookingHTML(c)}
       <h3 class="sec2">What ${esc(S.assistant)} learned</h3>
-      <dl class="facts">${[["Phone", c.phone], ...FIELD_ROWS.map(([k, l]) => [l, k === "pain" && f[k] != null ? f[k] + "/10" : k === "urgency" && f[k] != null ? f[k] + "/5 (the caller's own rating)" : f[k]])].filter(x => x[1] != null && x[1] !== "").map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join("")}
+      <dl class="facts">${[["Phone", c.phone], ...fieldRows(f).map(([k, l]) => [l, k === "pain" && f[k] != null ? f[k] + "/10" : k === "urgency" && f[k] != null ? f[k] + "/5 (the caller's own rating)" : f[k]])].filter(x => x[1] != null && x[1] !== "").map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join("")}
         ${c.mood ? `<div><dt>Mood</dt><dd>${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}${c.mood.note ? " · " + esc(c.mood.note) : ""} <em class="tag ai">✦ AI</em></dd></div>` : ""}
         <div><dt>Call</dt><dd>${esc(whenFull(c.at))} · ${mmss(c.dur || 0)}${c.source === "phone" ? ` · phone line, answered by ${PN[c.provider] || "the voice agent"}` : c.engine === "ai" ? ` · ✦ AI by ${PN[c.provider] || "AI"}` : " · script, no AI"}</dd></div></dl>
       <button class="link small" data-act="txtoggle">${showTx ? "Hide the call" : "Read the whole call"}</button>
       ${showTx ? `<div class="c-log flat">${(c.transcript || []).map(l => `<p class="bub ${l.who}">${esc(l.t)}</p>`).join("")}</div>` : ""}
-      <h3 class="sec2">Patient</h3>
-      ${pt ? `<button class="crow" data-act="openpat" data-id="${esc(pt.id)}"><span class="av">${esc(initials(pt.name))}</span><span class="grow"><b>${esc(pt.name)}</b><small>${pt.age ? esc(pt.age) + " · " : ""}${esc(pt.phone)} · patient since ${esc(new Date(pt.since).getFullYear())}</small></span><span class="chev">›</span></button>
-        ${past.length ? `<ul class="hist">${past.slice(0, 4).map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">No earlier visits.</p>`}
+      <h3 class="sec2">${esc(word("Client"))}</h3>
+      ${pt ? `<button class="crow" data-act="openpat" data-id="${esc(pt.id)}"><span class="av">${esc(initials(pt.name))}</span><span class="grow"><b>${esc(pt.name)}</b><small>${pt.age ? esc(pt.age) + " · " : ""}${esc(pt.phone)} · ${esc(word("client"))} since ${esc(new Date(pt.since).getFullYear())}</small></span><span class="chev">›</span></button>
+        ${past.length ? `<ul class="hist">${past.slice(0, 4).map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">No earlier ${esc(word("visits"))}.</p>`}
         ${(pt.notes || []).length ? `<ul class="notes">${pt.notes.slice(0, 4).map(n => `<li><p>${esc(n.text)}</p><small class="muted">${esc(n.by)} · ${esc(dayLabel(n.at))}</small></li>`).join("")}</ul>` : ""}`
       : `<p class="muted">No record yet. Booking makes one.</p>`}
       <h3 class="sec2">Add a note</h3>
@@ -2276,7 +2447,7 @@ function clientApp() {
     const contact = Math.max(p.since || 0, last ? last.at : 0, ...(p.notes || []).map(n => n.at || 0), ...appts.map(a => a.made || 0));
     return { next, visits, calls, waiting, last, isNew, shared, status, contact };
   }
-  const PAT_STATUS = [["tobook", "To book"], ["booked", "Visit booked"], ["new", "New patients"], ["other", "Everyone else"]];
+  const PAT_STATUS = () => [["tobook", "To book"], ["booked", word("Visit") + " booked"], ["new", "New " + word("clients")], ["other", "Everyone else"]];
   const PAT_FILTERS = [["all", "All"], ["tobook", "To book"], ["booked", "Booked"], ["new", "New"]];
   let patFilter = "all";
   function patCard(p, x) {
@@ -2286,9 +2457,9 @@ function clientApp() {
       : x.last ? `<span>Called ${esc(rel(x.last.at))} · ${esc(((x.last.summary || {}).reason) || "Call")}</span>`
       : `<span class="muted">No calls yet</span>`;
     const chips = [
-      x.isNew ? `<span class="pill">New patient</span>` : "",
+      x.isNew ? `<span class="pill">New ${esc(word("client"))}</span>` : "",
       x.last && x.last.source === "phone" ? `<span class="pill line">📞 Phone</span>` : "",
-      x.visits ? `<span class="pill soft">${x.visits} visit${x.visits === 1 ? "" : "s"}</span>` : "",
+      x.visits ? `<span class="pill soft">${x.visits} ${x.visits === 1 ? esc(word("visit")) : esc(word("visits"))}</span>` : "",
       x.calls.length ? `<span class="pill soft">${x.calls.length} call${x.calls.length === 1 ? "" : "s"}</span>` : "",
       (p.notes || []).length ? `<span class="pill soft">${p.notes.length} note${p.notes.length === 1 ? "" : "s"}</span>` : "",
       x.last && x.last.mood ? `<span class="pill soft">${S.moods[x.last.mood.label] || ""} ${esc(x.last.mood.label)}</span>` : "",
@@ -2322,16 +2493,16 @@ function clientApp() {
     } else {
       const by = { tobook: (a, b) => ((b.x.waiting.summary || {}).priority || 0) - ((a.x.waiting.summary || {}).priority || 0) || a.x.waiting.at - b.x.waiting.at,
         booked: (a, b) => a.x.next.at - b.x.next.at, new: (a, b) => b.p.since - a.p.since, other: (a, b) => a.p.name.localeCompare(b.p.name) };
-      groups = PAT_STATUS.map(([k, title]) => ({ k, title, rows: list.filter(r => r.x.status === k).sort(by[k]) }));
+      groups = PAT_STATUS().map(([k, title]) => ({ k, title, rows: list.filter(r => r.x.status === k).sort(by[k]) }));
     }
     groups = groups.filter(g => g.rows.length);
     return `<div class="ptools">
-        <div class="search"><input id="pq" type="search" placeholder="Name or phone number" autocomplete="off" aria-label="Find a patient"></div>
+        <div class="search"><input id="pq" type="search" placeholder="Name or phone number" autocomplete="off" aria-label="Find a ${esc(word("client"))}"></div>
         <div class="seg wide" role="tablist" aria-label="Show">${PAT_FILTERS.map(([v, l]) => `<button class="${patFilter === v ? "on" : ""}" data-act="pfilter" data-v="${v}" aria-pressed="${patFilter === v}">${l} <i>${count(v)}</i></button>`).join("")}</div>
         <div class="pgroup"><span>Group by</span>${[["status", "Status"], ["recent", "Last contact"], ["az", "Name"]].map(([v, l]) => `<button class="chip ${grp === v ? "on" : ""}" data-act="pgroup" data-v="${v}" aria-pressed="${grp === v}">${l}</button>`).join("")}</div>
       </div>
       ${groups.length ? `<div class="plist">${groups.map(g => `<section class="pgrp" aria-label="${esc(g.title)}"><h3 class="pgrp-h">${esc(g.title)}<i>${g.rows.length}</i></h3>${g.rows.map(r => patCard(r.p, r.x)).join("")}</section>`).join("")}</div>`
-        : `<div class="empty"><h2>No one found</h2><p>${q ? "Try another name or number." : patFilter !== "all" ? "Nobody in this group right now." : "Patients appear here after their first call."}</p>${patFilter !== "all" ? `<button class="primary" data-act="pfilter" data-v="all">Show everyone</button>` : ""}</div>`}`;
+        : `<div class="empty"><h2>No one found</h2><p>${q ? "Try another name or number." : patFilter !== "all" ? "Nobody in this group right now." : `${word("Clients")} appear here after their first call.`}</p>${patFilter !== "all" ? `<button class="primary" data-act="pfilter" data-v="all">Show everyone</button>` : ""}</div>`}`;
   }
   const digitsOf = s => String(s || "").replace(/\D/g, "");
   const clip = (x, n) => { x = String(x || ""); return x.length <= n ? x : x.slice(0, n).replace(/[\s,;:.]+\S*$/, "") + "…"; };   // at a word, not mid-number
@@ -2368,7 +2539,7 @@ function clientApp() {
   const CHEV_R = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   // "today" is in view: the day itself, its week, its month
   const isNow = () => { const t = sod(Date.now()); return calView === "day" ? calDay === t : calView === "week" ? monday(calDay) === monday(t) : new Date(calDay).getMonth() === new Date(t).getMonth() && new Date(calDay).getFullYear() === new Date(t).getFullYear(); };
-  const noDentists = (what) => `<div class="empty"><h2>No dentists yet</h2><p>Add the clinic's dentists in Settings › Dentists, with their days and hours. ${what}</p><button class="primary" data-act="dentnew">Add a dentist</button></div>`;
+  const noDentists = (what) => `<div class="empty"><h2>No ${esc(word("staffs"))} yet</h2><p>Add the ${esc(word("business"))}'s ${esc(word("staffs"))} in Settings › ${esc(word("Staffs"))}, with their days and hours. ${what}</p><button class="primary" data-act="dentnew">Add a ${esc(word("staff"))}</button></div>`;
   function calHTML() {
     calCache.clear();
     if (!S.doctors.length) return `<div class="calwrap">${noDentists("The calendar shows how full each of them is.")}</div>`;
@@ -2384,7 +2555,7 @@ function clientApp() {
   }
   function calDayHTML() {
     const cl = clinicLoad(calDay);
-    if (!cl) return `<div class="empty"><h2>The clinic is closed</h2><p>No dentist works on ${esc(fmtD(calDay, { weekday: "long" }))}s.</p></div>`;
+    if (!cl) return `<div class="empty"><h2>The ${esc(word("business"))} is closed</h2><p>No ${esc(word("staff"))} works on ${esc(fmtD(calDay, { weekday: "long" }))}s.</p></div>`;
     const ours = [];
     const rows = S.doctors.map(d => {
       const l = load(d, calDay);
@@ -2397,14 +2568,14 @@ function clientApp() {
     ours.sort((a, b) => a.t - b.t);
     return `<div class="calsum"><b>${cl.pct}%</b><span>of the day's times are booked<small>${cl.used} of ${cl.total} times</small></span></div>
       ${rows}
-      <h3 class="sec2">Visits</h3>
-      ${ours.length ? ours.map(o => `<button class="crow" data-act="openpat" data-id="${esc(o.x.p.id)}"><span class="cr-t">${hhmm(o.t)}</span><span class="grow"><b>${esc(o.x.p.name)}</b><small>${esc(o.x.a.reason || "Visit")} · ${esc(o.d.short)}${o.x.a.status === "done" ? " · done" : ""}</small></span><span class="chev">›</span></button>`).join("") : `<p class="muted">No visits booked on this day.</p>`}`;
+      <h3 class="sec2">${esc(word("Visits"))}</h3>
+      ${ours.length ? ours.map(o => `<button class="crow" data-act="openpat" data-id="${esc(o.x.p.id)}"><span class="cr-t">${hhmm(o.t)}</span><span class="grow"><b>${esc(o.x.p.name)}</b><small>${esc(o.x.a.reason || word("Visit"))} · ${esc(o.d.short)}${o.x.a.status === "done" ? " · done" : ""}</small></span><span class="chev">›</span></button>`).join("") : `<p class="muted">No ${esc(word("visits"))} booked on this day.</p>`}`;
   }
   function calWeekHTML() {
     const days = weekDays(calDay), today = sod(Date.now());
     const head = `<tr><th></th>${days.map(d => `<th class="${d === today ? "today" : ""}">${esc(fmtD(d, { weekday: "short" }))}<small>${new Date(d).getDate()}</small></th>`).join("")}</tr>`;
     const body = S.doctors.map(doc => `<tr><th class="rh" title="${esc(doc.name)}">${esc(shortDoc(doc))}</th>${days.map(d => { const l = load(doc, d); return l ? `<td><button class="hcell" data-act="calday" data-v="${d}" aria-label="${esc(doc.short)}, ${esc(fmtD(d, { weekday: "long" }))}: ${l.pct}%">${heat(l.pct)}<b>${l.pct}</b></button></td>` : `<td><span class="hcell off">–</span></td>`; }).join("")}</tr>`).join("");
-    const foot = `<tr class="tot"><th class="rh">Clinic</th>${days.map(d => { const l = clinicLoad(d); return `<td><button class="hcell" data-act="calday" data-v="${d}">${heat(l ? l.pct : 0)}<b>${l ? l.pct : "–"}</b></button></td>`; }).join("")}</tr>`;
+    const foot = `<tr class="tot"><th class="rh">${esc(word("Business"))}</th>${days.map(d => { const l = clinicLoad(d); return `<td><button class="hcell" data-act="calday" data-v="${d}">${heat(l ? l.pct : 0)}<b>${l ? l.pct : "–"}</b></button></td>`; }).join("")}</tr>`;
     const w = weekLoad(calDay), prev = weekLoad(addDays(calDay, -7));
     return `<div class="calsum"><b>${w}%</b><span>of the week's times are booked<small>${vsLast(w, prev)} the week before (${prev}%)</small></span></div>
       <div class="hscroll"><table class="heatgrid"><col class="rhc">${head}${body}${foot}</table></div>
@@ -2442,11 +2613,11 @@ function clientApp() {
     const hot = docs.slice().sort((a, b) => b.v - a.v)[0], spare = docs.filter(x => x.d !== hot.d && x.d.spec.some(sp => hot.d.spec.includes(sp))).sort((a, b) => a.v - b.v)[0];
     const insights = [
       `${busiest.long} is the busiest day (${busiest.v}% on average), ${quiet.long} the quietest (${quiet.v}%): offer ${quiet.long} first to anyone flexible.`,
-      hot.v >= 70 ? `${hot.d.short} is ${hot.v}% booked for the next two weeks${spare ? `; ${spare.d.short} covers some of the same work and is at ${spare.v}%` : ""}.` : `No dentist is over 70% for the next two weeks; ${hot.d.short} is the fullest at ${hot.v}%.`,
+      hot.v >= 70 ? `${hot.d.short} is ${hot.v}% booked for the next two weeks${spare ? `; ${spare.d.short} covers some of the same work and is at ${spare.v}%` : ""}.` : `No ${word("staff")} is over 70% for the next two weeks; ${hot.d.short} is the fullest at ${hot.v}%.`,
       `This week is ${thisW}% booked, ${vsLast(thisW, lastW).replace(/^[▲▼] /, "")} last week.`,
     ];
     const anything = weeks.some(x => x.v) || days14.some(x => x.v);
-    if (!anything) return `<div class="empty"><h2>No trends yet</h2><p>They appear as calls come in and visits are booked: how full each week is, the busiest days and dentists, and the calls per day.</p></div>`;
+    if (!anything) return `<div class="empty"><h2>No trends yet</h2><p>They appear as calls come in and ${esc(word("visits"))} are booked: how full each week is, the busiest days and ${esc(word("staffs"))}, and the calls per day.</p></div>`;
     if (!busiest.v) insights.shift();
     return `<div class="tiles">
         <div class="tile"><small>This week, booked</small><b>${thisW}%</b><span>${vsLast(thisW, lastW)} last week</span></div>
@@ -2455,9 +2626,9 @@ function clientApp() {
         <div class="tile"><small>Booked within a day</small><b>${bk.length ? Math.round(fast * 100 / bk.length) : 0}%</b><span>${bk.length} of ${need.length} booked</span></div>
       </div>
       <ul class="insights">${insights.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
-      <h3 class="sec2">Clinic occupancy by week</h3>${bars(weeks, "%")}<p class="note">The last bars are weeks ahead: they fill up as people call.</p>
+      <h3 class="sec2">${esc(word("Business"))} occupancy by week</h3>${bars(weeks, "%")}<p class="note">The last bars are weeks ahead: they fill up as people call.</p>
       <h3 class="sec2">Busiest days of the week</h3>${bars(wdays, "%")}<p class="note">The average over the last eight weeks and the next two.</p>
-      <h3 class="sec2">Dentists, next two weeks</h3>${bars(docs, "%")}
+      <h3 class="sec2">${esc(word("Staffs"))}, next two weeks</h3>${bars(docs, "%")}
       <h3 class="sec2">Calls per day</h3>${bars(days14, "")}<p class="note"><i class="k urgent"></i> urgent or emergency · the last 14 days</p>`;
   }
 
@@ -2469,7 +2640,7 @@ function clientApp() {
     const past = (p.appts || []).filter(a => !up.includes(a)).sort((a, b) => b.at - a.at);
     const cl = S.calls.filter(c => c.patientId === p.id);
     el.innerHTML = `<div class="sh-head"><h2>${esc(p.name)}</h2><button class="link" data-act="patclose">Done</button></div><div class="sh-body">
-      <dl class="facts"><div><dt>Phone</dt><dd>${esc(p.phone)}</dd></div>${p.age ? `<div><dt>Age</dt><dd>${esc(p.age)}</dd></div>` : ""}<div><dt>Patient since</dt><dd>${esc(new Date(p.since).toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</dd></div></dl>
+      <dl class="facts"><div><dt>Phone</dt><dd>${esc(p.phone)}</dd></div>${p.age ? `<div><dt>Age</dt><dd>${esc(p.age)}</dd></div>` : ""}<div><dt>${esc(word("Client"))} since</dt><dd>${esc(new Date(p.since).toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</dd></div></dl>
       <h3 class="sec2">Coming up</h3>
       ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || "")}</small></div><button class="sm danger ${patArmed === a.id ? "armed" : ""}" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">${patArmed === a.id ? "Confirm" : "Cancel"}</button></div>`).join("") : `<p class="muted">Nothing booked.</p>`}
       <h3 class="sec2">Message for ${esc(p.name.split(" ")[0])}</h3>
@@ -2478,8 +2649,8 @@ function clientApp() {
       ${(p.messages || []).length ? `<ul class="notes">${p.messages.slice(0, 5).map(m => `<li><p>“${esc(m.text)}”</p><small class="muted">✓ Passed on ${esc(whenFull(m.delivered))}</small></li>`).join("")}</ul>` : ""}
       <h3 class="sec2">Calls</h3>
       ${cl.length ? cl.map(c => `<button class="crow" data-act="opencase" data-id="${esc(c.id)}"><span class="stripe tri-${esc((c.summary || {}).triage || "routine")}"></span><span class="grow"><b>${esc((c.summary || {}).reason || "Call")}</b><small>${esc(whenFull(c.at))}${INTENT_L[c.intent] ? " · " + INTENT_L[c.intent] : c.followUp ? " · called again" : ""}${c.mood ? " · " + (S.moods[c.mood.label] || "") + " " + esc(c.mood.label) : ""}</small></span>${statusPill(c)}</button>`).join("") : `<p class="muted">No calls yet.</p>`}
-      <h3 class="sec2">Visits</h3>
-      ${past.length ? `<ul class="hist">${past.map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">No visits yet.</p>`}
+      <h3 class="sec2">${esc(word("Visits"))}</h3>
+      ${past.length ? `<ul class="hist">${past.map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">No ${esc(word("visits"))} yet.</p>`}
       <h3 class="sec2">Notes</h3>
       ${(p.notes || []).length ? `<ul class="notes">${p.notes.map(n => `<li><p>${esc(n.text)}</p><small class="muted">${esc(n.by)} · ${esc(dayLabel(n.at))}</small></li>`).join("")}</ul>` : `<p class="muted">No notes yet.</p>`}
       <textarea id="patnote" class="cfgin wide" rows="3" placeholder="Add a note to ${esc(p.name.split(" ")[0])}'s record"></textarea>
@@ -2564,7 +2735,7 @@ function clientApp() {
         const at = caseSlot, doc = docOf(caseDoc);
         send("book", { id: caseId, doctor: caseDoc, at, move: caseMove }, (ok, msg) => {
           caseBusy = false;
-          if (ok) { caseSlot = 0; toast(`Booked ${dayLabel(at)}, ${hhmm(at)} with ${doc ? doc.short : "the dentist"}`); }
+          if (ok) { caseSlot = 0; toast(`Booked ${dayLabel(at)}, ${hhmm(at)} with ${doc ? doc.short : "the " + word("staff")}`); }
           else { toast(msg || "Not booked"); caseSlot = 0; }
           renderCase();
         });
@@ -2639,6 +2810,9 @@ function clientApp() {
       case "toggle": S.settings[v] = !S.settings[v]; send("set", { k: v, v: S.settings[v] }); renderCfg(); renderAI(); break;
       case "aiopen": aiOpen = true; renderAI(); send("state", {}); break;   // fresh token counts
       case "cfgopen": cfgOpen = true; renderCfg(); break;
+      case "svcadd": { const i = $("#svcnew"); if (i && i.value.trim()) send("svc-add", { l: i.value }); break; }
+      case "svcdel": send("svc-remove", { k: v }); break;
+      case "svcreset": send("svc-reset", {}); break;
       case "dentnew": dent = { id: "", name: "", short: "", role: "", spec: ["general"], days: [1, 2, 3, 4, 5], from: 8, to: 16 }; dentErr = ""; caseId = ""; renderCase();
         cfgOpen = true; renderCfg(); setTimeout(() => { const f = $("#dn"); if (f) { f.scrollIntoView({ block: "center" }); } }, 60); break;
       case "dentedit": { const d = (S.allDoctors || S.doctors).find(x => x.id === id); if (d) { dent = JSON.parse(JSON.stringify(d)); dentErr = ""; renderCfg(); } break; }
@@ -2682,7 +2856,9 @@ function clientApp() {
     if (c.contains("ttsvoicesel")) { S.settings.ttsVoice = e.target.value; send("set", { k: "ttsVoice", v: e.target.value }); return; }
     if (c.contains("ttsmodelsel")) { S.settings.ttsModel = e.target.value; send("set", { k: "ttsModel", v: e.target.value }); renderCfg(); return; }
     if (c.contains("ttsinstr")) { S.settings.ttsInstructions = e.target.value.trim(); send("set", { k: "ttsInstructions", v: S.settings.ttsInstructions }); return; }
-    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
+    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && !c.contains("bizsel") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
+    if (c.contains("bizsel")) { dent = null; send("business", { v: e.target.value }); return; }
+    if (c.contains("wordin")) { send("words", { k: e.target.dataset.k, v: e.target.value }); return; }
     if (c.contains("bkdoc")) { caseDoc = e.target.value; caseDay = 0; caseSlot = 0; renderCase(); return; }
     if (c.contains("bkmove")) { caseMove = e.target.value; const cc = byCall(caseId); caseSug = cc ? suggest(cc, caseMove) : null; if (caseSug) useTime(caseSug.doctor, caseSug.at); else { caseDay = 0; caseSlot = 0; } renderCase(); return; }
     if (c.contains("modelsel")) send("aimodel", { p: e.target.dataset.p, v: e.target.value });
@@ -3033,6 +3209,13 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .mcell.out{border:0;background:none}
 .mcell.closed{background:none;border-style:dashed;color:var(--muted)}
 .cal-k{margin-top:14px}
+.wpair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:6px}
+.wpair .cfgin{min-width:0;width:100%;box-sizing:border-box}
+.bizsel.wide{width:100%;margin-top:8px}
+.svc{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.svc-c{display:inline-flex;align-items:center;gap:4px;padding-right:4px}
+.svc-x{border:0;background:none;color:var(--muted);font:inherit;font-size:18px;line-height:1;width:28px;height:28px;border-radius:50%}
+.svc-add{display:flex;gap:8px;align-items:center}
 .dform{display:flex;flex-direction:column;gap:6px;background:var(--sheet);border:1px solid var(--signal);border-radius:16px;padding:12px 14px;margin:6px 0 10px}
 .dform .chips{display:flex;flex-wrap:wrap;gap:6px}
 .dhours{display:grid;grid-template-columns:auto 1fr auto 1fr;align-items:center;gap:8px}
@@ -3282,7 +3465,7 @@ const buildHTML = () => `<!doctype html><html lang="en" data-theme="${initTheme}
   <nav id="tabs" class="tabs" aria-label="Screens"></nav>
 </header>
 <main id="list"><div class="booting" role="status"><span class="busy-dot"></span>Opening the front desk…</div></main>
-<p class="ver">Frontly v${VERSION} · a demo app, not for real patient records</p>
+<p class="ver">Frontly v${VERSION} · a demo app, not for real personal records</p>
 <div id="callsheet" class="sheet" role="dialog" aria-label="Call"></div>
 <div id="patsheet" class="sheet" aria-label="Patient"></div>
 <div id="casesheet" class="sheet" aria-label="Call note"></div>

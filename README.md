@@ -5,11 +5,11 @@
 
 <h2>A virtual receptionist that screens every caller and leaves a note ready to book</h2>
 
-Call the clinic. Answer Reva. Book the visit.
+Call the office. Answer Reva. Book the visit.
 
 <a href="#install"><img src="docs/button-install.png" height="48" alt="Install Frontly free"></a>&nbsp;&nbsp;<a href="CHANGELOG.md"><img src="docs/button-whats-new.png" height="48" alt="See what's new in Frontly"></a>
 
-<sub>Free · iPhone and iPad · Runs in the free Scriptable app · A demo with made-up patients · AI is optional, with your own Claude or OpenAI key</sub>
+<sub>Free · iPhone and iPad · Runs in the free Scriptable app · For a dental clinic, a car service or any office · AI is optional, with your own Claude or OpenAI key</sub>
 
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgadominas%2FFrontly%2Fmain%2Freleases.json&query=%24.releases%5B0%5D.version&label=version&color=F59BB5&labelColor=0E1116&style=flat-square)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/iOS-Scriptable-171B22?style=flat-square&labelColor=0E1116)](https://apps.apple.com/app/scriptable/id1405459188)
@@ -22,7 +22,7 @@ Call the clinic. Answer Reva. Book the visit.
 <!-- header:end -->
 
 > [!IMPORTANT]
-> **A demo app.** Frontly shows what a virtual receptionist can do. It starts empty: you add the dentists, and the patients are whoever calls. It is not meant for real patient records and gives no medical advice. See [Disclaimer](#disclaimer).
+> **A demo app.** Frontly shows what a virtual receptionist can do, for a dental clinic, a car service or any office. It starts empty: you add the staff, and the clients are whoever calls. It is not meant for real patient records and gives no medical advice. See [Disclaimer](#disclaimer).
 
 ## See it in action
 
@@ -144,9 +144,21 @@ Without AI the note is put together from these answers by fixed rules; with AI, 
 
 Give Reva a real phone number: a Twilio number, answered by an ElevenLabs agent with Reva's instructions, and a small free Cloudflare Worker that tells her who's calling and hands finished calls to Frontly. They land at the front desk like any other call, marked 📞, filed under the caller's record. Setup, step by step: [bridge/README.md](bridge/README.md).
 
-### Add your dentists
+### Set up your business
 
-**Settings › Dentists › Add**: the name, a short name for cards and the calendar, the role, what they do (general, root canal, surgery, braces, cleaning, children), the days they work and their hours. Bookings, the AI's suggestions and the calendar use them. **Edit** changes one; **Remove** takes one off (not while they have visits booked; past visits keep their name).
+**Settings › Business › Kind of business** picks a template. Each one sets the words the app uses, the services callers come for, and the questions Reva asks, in English and Lithuanian, with or without AI:
+
+| Template | Staff · callers · bookings | Reva asks about | Safety rule |
+| --- | --- | --- | --- |
+| Dental clinic (the demo the phone line was set up for) | dentists · patients · visits | name, age, the reason, where it hurts, pain 0–10, urgency, best time, anything else | trouble breathing or swallowing, spreading swelling, bleeding that won't stop: call 112 |
+| Car service | mechanics · customers · appointments | name, the problem, the car (make, model, year), urgency (5: it can't be driven), best time, warning lights or noises | smoke, a fuel smell, failing brakes, an accident: move away from the car, call 112 if anyone is hurt |
+| Office or other service | employees · clients · appointments | name, the reason, urgency, best time, anything else | none |
+
+Rename any word underneath (an "employee" can be a "consultant", a "customer" a "driver"), and add or remove services. **Reset** puts the template's words and services back. Reva's instructions for the phone line (Settings › Phone line › Copy) follow the template; the dental clinic's are word for word what they were.
+
+### Add your staff
+
+**Settings › Dentists › Add** (the section takes your word for staff: Mechanics, Employees…): the name, a short name for cards and the calendar, the role, the services they do, the days they work and their hours. Bookings, the AI's suggestions and the calendar use them. **Edit** changes one; **Remove** takes one off (not while they have visits booked; past visits keep their name).
 
 ### Start empty again
 
@@ -179,7 +191,8 @@ Tap the sliders icon at the top. Changes apply at once and are saved in `setting
 | Appearance | Colours (Auto or six palettes), layout (Comfortable, Compact, Tiny), text size, headline font |
 | Calls | Language of the call, Reva's voice (iPhone or AI voice, which voice, how she sounds), how Reva hears you, listening on its own, AI settings |
 | Front desk | Who is signed in; sign out |
-| Dentists | Add, edit and remove dentists: name, role, what they do, days and hours |
+| Business | Kind of business (Dental clinic, Car service, Office or other service), your own words for staff, callers, bookings and the place, the services |
+| Dentists (your word for staff) | Add, edit and remove staff: name, role, services, days and hours |
 | Phone line | The bridge's address and token, its status, Reva's instructions for ElevenLabs |
 | Data | Remove all calls and patients |
 | Updates | Offer new versions, check now, the start-up log |
