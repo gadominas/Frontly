@@ -2,6 +2,25 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.13.0 (2026-11-13): A quicker, tighter receptionist
+
+- 🔁 **No more loops**: Each question is asked once. "Ne", "nėra" or a stuttered "n-no" counts as an answer, and one "no" answers "any medicines or allergies?".
+- 🙊 **Your name, not every time**: The caller's name is used at most twice: when confirming who they are and when saying goodbye.
+- 🎯 **On topic**: Only the visit, the clinic's treatments and procedures, and medicines and allergies when they matter; anything else gets one polite sentence and back to the point.
+
+**Changes**
+
+- New talk rules in the phone agent's instructions and the in-app call: quick, one question at a time, no recaps, no repeated openers like "Supratau", each question once, short or unclear answers count, two-part questions
+- Stay on topic: each kind of business has its own topics (dental: teeth and mouth, treatments and procedures, medicines and allergies; car service: the car, repairs and checks; office: the matter and its services); no advice, diagnoses or prices
+- bridge/README.md: how to make the ElevenLabs agent quicker (LLM, voice model, turn eagerness, speculative turn, timeouts)
+- Copy the instructions into ElevenLabs again after updating (Settings › Phone line › Reva's instructions)
+- Tests: 28-talk-rules (34 of 34 with the testkit)
+
+**Fixes**
+
+- The phone agent could ask the same question again and again after "no"
+- The caller's name was repeated in nearly every reply
+
 ## 1.12.1 (2026-11-13): A tidier booking box
 
 - 📏 **Lengths in line**: The chosen visit length no longer sits higher than the others.
