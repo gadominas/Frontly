@@ -2,6 +2,22 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.8.3 (2026-11-13): ClinicCards times, found
+
+- 🔎 **Check the diary**: The ClinicCards window shows what a week's schedule contains: whose shifts, how many, and whether each person is linked in Frontly.
+- 🗓️ **More replies understood**: Shifts sent grouped by date, or under a key, are now read; before, a linked person could show no times at all.
+- 📦 **A week at a time**: The diary is asked for in weeks, so a date picked far ahead doesn't turn into one long request.
+
+**Changes**
+
+- ClinicCards diary: requested week by week; replies read as a list, under data/items/shifts, grouped by date or keyed by id; other field names for the person and the times understood
+- Settings › Planning › ClinicCards › Check the diary: pick a week; see the shift count, each person (name, id, shifts, linked or not), the reply's shape and a shift's fields
+- Tests: 22-cliniccards-diary (28 of 28 with the testkit)
+
+**Fixes**
+
+- A ClinicCards account that sends shifts grouped by date showed no free times for anyone
+
 ## 1.8.2 (2026-11-13): Pick any date
 
 - 📅 **Pick a date**: Beside the days in the booking box: the date picker opens, and any day from today on shows its free times.

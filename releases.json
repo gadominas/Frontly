@@ -4,6 +4,36 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.8.3",
+      "date": "2026-11-13",
+      "title": "ClinicCards times, found",
+      "highlights": [
+        {
+          "icon": "🔎",
+          "title": "Check the diary",
+          "text": "The ClinicCards window shows what a week's schedule contains: whose shifts, how many, and whether each person is linked in Frontly."
+        },
+        {
+          "icon": "🗓️",
+          "title": "More replies understood",
+          "text": "Shifts sent grouped by date, or under a key, are now read; before, a linked person could show no times at all."
+        },
+        {
+          "icon": "📦",
+          "title": "A week at a time",
+          "text": "The diary is asked for in weeks, so a date picked far ahead doesn't turn into one long request."
+        }
+      ],
+      "changes": [
+        "ClinicCards diary: requested week by week; replies read as a list, under data/items/shifts, grouped by date or keyed by id; other field names for the person and the times understood",
+        "Settings › Planning › ClinicCards › Check the diary: pick a week; see the shift count, each person (name, id, shifts, linked or not), the reply's shape and a shift's fields",
+        "Tests: 22-cliniccards-diary (28 of 28 with the testkit)"
+      ],
+      "fixes": [
+        "A ClinicCards account that sends shifts grouped by date showed no free times for anyone"
+      ]
+    },
+    {
       "version": "1.8.2",
       "date": "2026-11-13",
       "title": "Pick any date",
