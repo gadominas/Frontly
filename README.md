@@ -164,6 +164,10 @@ Rename any word underneath (an "employee" can be a "consultant", a "customer" a 
 
 **Settings › Planning** chooses where bookings live: Frontly's own diary, or ClinicCards. Each planning service has its own settings window: the API key (kept in the Keychain), a connection test, the cabinet and the note for each visit, and which ClinicCards person each staff member is (or **Import** to link and add them). With ClinicCards in use, the free times come from its shifts minus its visits, and each booking is made there first, as a visit to confirm. Cancelling or moving a visit has to be done in ClinicCards as well: Frontly says so when you do it. Details, and how to add another planning service: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 
+### Register someone without a call
+
+Someone at the desk, or a call you took yourself: **Front desk › Register someone**, or **Patients › Add**. Enter the name, phone number (Reva recognises them by it next time) and age, and leave **Add a request to book** on to say what they need, the service (or let Frontly suggest one), how urgent it is and the best time. The request waits in **To book** marked **✎ Front desk**, and opens straight into the booking box with a time already suggested. For someone already on record, **New request** on their page does the same without asking their details again.
+
 ### Import clients and staff
 
 **Settings › Data › Import** takes a CSV file (**Choose a file…**) or rows copied from Excel, Numbers or Google Sheets. The first row names the columns, in English or Lithuanian:

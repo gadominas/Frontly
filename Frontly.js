@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -700,18 +700,40 @@ const samePhone = (a, b) => { const x = digits(a), y = digits(b); return x.lengt
 const patientByPhone = ph => patients.find(p => samePhone(p.phone, ph));
 const firstName = n => String(n || "").trim().split(/\s+/)[0] || "";
 // A client's page › Edit: name, phone and age. The number is how callers are recognised, so two records can't share it.
+// A client's details as typed: { name, phone, age } cleaned, or { err }. The number can't be another record's.
+function checkClient(m, self) {
+  const name = String(m.name || "").trim().replace(/\s+/g, " ").slice(0, 80), phone = String(m.phone || "").trim().slice(0, 30);
+  const ageTxt = String(m.age == null ? "" : m.age).trim(), age = ageTxt === "" ? null : Math.round(Number(ageTxt));
+  if (name.length < 2) return { err: "Add the name" };
+  if (phone.replace(/\D/g, "").length < 6) return { err: "Add a phone number with at least 6 digits" };
+  if (ageTxt !== "" && !(age >= 0 && age <= 120)) return { err: "Age: a number from 0 to 120, or leave it empty" };
+  const other = patients.find(x => x !== self && samePhone(x.phone, phone));
+  if (other) return { err: `${other.name} already has that number` };
+  return { name, phone, age };
+}
 function editPatient(m) {
   const p = patients.find(x => x.id === m.id);
   if (!p) return "That record isn't there any more";
-  const name = String(m.name || "").trim().replace(/\s+/g, " ").slice(0, 80), phone = String(m.phone || "").trim().slice(0, 30);
-  const ageTxt = String(m.age == null ? "" : m.age).trim(), age = ageTxt === "" ? null : Math.round(Number(ageTxt));
-  if (name.length < 2) return "Add the name";
-  if (phone.replace(/\D/g, "").length < 6) return "Add a phone number with at least 6 digits";
-  if (ageTxt !== "" && !(age >= 0 && age <= 120)) return "Age: a number from 0 to 120, or leave it empty";
-  const other = patients.find(x => x !== p && samePhone(x.phone, phone));
-  if (other) return `${other.name} already has that number`;
-  p.name = name; p.phone = phone; p.age = age;
+  const v = checkClient(m, p);
+  if (v.err) return v.err;
+  p.name = v.name; p.phone = v.phone; p.age = v.age;
   return "";
+}
+// Registered at the front desk, no call: a request to book, with a note made from what was typed (triage, service and
+// person as for a call). It waits in To book like a call, marked as from the front desk.
+function deskRequest(pt, m, isNew) {
+  const urg = Math.round(Number(m.urgency)), now = Date.now();
+  const c = { id: "r-" + now.toString(36), at: now, dur: 0, phone: pt.phone, patientId: pt.id, source: "desk", engine: "desk", provider: "", lang: settings.lang || "en",
+    isNew: !!isNew, status: "waiting", deskNotes: [], mood: null, transcript: [], by: settings.deskUser || "",
+    fields: { name: pt.name, age: pt.age, complaint: String(m.reason || "").trim().slice(0, 300) || null, location: null, pain: null,
+      urgency: urg >= 1 && urg <= 5 ? urg : null, preferred: String(m.preferred || "").trim().slice(0, 120) || null, notes: String(m.note || "").trim().slice(0, 500) || null } };
+  const s = templateSummary(c);
+  if (m.service && SPECIALTIES[m.service]) { s.specialty = m.service; const d = doctorFor(m.service); if (d) s.doctor = d.id; }
+  s.kind = "desk"; s.text = `Registered at the front desk${c.by ? " by " + c.by : ""}: ${c.fields.complaint || "to book"}${c.fields.preferred ? ". Best time: " + c.fields.preferred : ""}.`;
+  delete s.mood;
+  c.summary = s; c.intent = "new_visit";
+  calls.unshift(c);
+  return c;
 }
 // A client's page › Remove: not while a booking is ahead; their calls stay, without the record
 function removePatient(id) {
@@ -1572,6 +1594,26 @@ async function handle(m) {
       if (lineOn()) lineReq("PUT", "/patients", patientsBrief()).catch(e => startLog("phone line: " + String(e.message || e).slice(0, 100)));
       return call("__done", m.req, true, "");
     }
+    case "pat-add": {   // a client registered by hand, and maybe a request to book
+      const v = checkClient(m, null);
+      if (v.err) return call("__done", m.req, false, v.err);
+      if (m.book && !String(m.reason || "").trim()) return call("__done", m.req, false, "Add what they need, or leave out the request");
+      const pt = { id: "p-" + Date.now().toString(36), name: v.name, phone: v.phone, age: v.age, since: Date.now(), notes: [], appts: [] };
+      if (String(m.note || "").trim()) pt.notes.push({ at: Date.now(), by: settings.deskUser || "Front desk", text: String(m.note).trim().slice(0, 500) });
+      patients.push(pt);
+      const c = m.book ? deskRequest(pt, Object.assign({}, m, { note: "" }), true) : null;
+      saveAll(); saveWidget(widgetSnapshot()); toast(c ? `${pt.name} added, ready to book` : `${pt.name} added`); push();
+      if (lineOn()) lineReq("PUT", "/patients", patientsBrief()).catch(e => startLog("phone line: " + String(e.message || e).slice(0, 100)));
+      return call("__done", m.req, true, c ? "case:" + c.id : "pat:" + pt.id);
+    }
+    case "desk-request": {   // an existing client, a new request
+      const pt = patients.find(x => x.id === m.patient);
+      if (!pt) return call("__done", m.req, false, "That record isn't there any more");
+      if (!String(m.reason || "").trim()) return call("__done", m.req, false, "Add what they need");
+      const c = deskRequest(pt, m, false);
+      saveAll(); saveWidget(widgetSnapshot()); push();
+      return call("__done", m.req, true, "case:" + c.id);
+    }
     case "pat-remove": {
       const err = removePatient(m.id);
       if (err) { toast(err); return push(); }
@@ -2009,6 +2051,35 @@ function clientApp() {
         <label class="lbl-s" for="imptext">Or paste the rows</label>
         <textarea id="imptext" class="cfgin wide" rows="7" placeholder="Paste here" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
         <button class="primary block" data-act="impcheck">Check</button>`}
+    </div>`;
+  }
+  // Register at the front desk, no call: a new client (and maybe a request to book), or a new request for one
+  const PLUS_SVG = `<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>`;
+  let regFor = "", regErr = "", reg = null;
+  function readReg() {
+    const v = id => { const el = $("#rg-" + id); return el ? (el.type === "checkbox" ? el.checked : el.value) : undefined; };
+    ["name", "phone", "age", "note", "reason", "svc", "pref", "book"].forEach(k => { const x = v(k); if (x !== undefined) reg[k] = x; });
+  }
+  function renderReg() {
+    const el = $("#regsheet"); el.classList.toggle("open", !!regFor); lockBody();
+    if (!regFor) return;
+    const pt = regFor !== "new" && byPatient(regFor), isNew = !pt, askAge = (S.ask || []).includes("age"), r = reg;
+    el.innerHTML = `<div class="sh-head"><h2>${isNew ? "Register someone" : "New request"}</h2><button class="link" data-act="regclose">Cancel</button></div><div class="sh-body">
+      ${isNew ? `<p class="muted">Someone at the desk, or a call you took yourself. ${esc(S.assistant)} recognises them by their number when they call next.</p>
+        <div class="dform" role="group" aria-label="The ${esc(word("client"))}">
+        <label class="lbl-s" for="rg-name">Name</label><input id="rg-name" class="cfgin wide" value="${esc(r.name)}" autocomplete="off">
+        <label class="lbl-s" for="rg-phone">Phone</label><input id="rg-phone" class="cfgin wide" type="tel" value="${esc(r.phone)}" autocomplete="off">
+        ${askAge ? `<label class="lbl-s" for="rg-age">Age</label><input id="rg-age" class="cfgin wide" inputmode="numeric" value="${esc(r.age)}" autocomplete="off">` : ""}
+        <label class="lbl-s" for="rg-note">Note about them <span class="muted">(optional)</span></label><input id="rg-note" class="cfgin wide" value="${esc(r.note)}" autocomplete="off"></div>
+        <label class="rg-sw"><input id="rg-book" type="checkbox" ${r.book ? "checked" : ""}> <b>Add a request to book</b></label>`
+      : `<p class="muted">For ${esc(pt.name)} · ${esc(pt.phone)}. It goes to To book, ready for a time.</p>`}
+      ${!isNew || r.book ? `<div class="dform" role="group" aria-label="The request">
+        <label class="lbl-s" for="rg-reason">What they need</label><input id="rg-reason" class="cfgin wide" value="${esc(r.reason)}" placeholder="${esc(S.business === "car" ? "Brakes squeal, service due" : S.business === "office" ? "A consultation about…" : "Toothache, lower left")}" autocomplete="off">
+        <label class="lbl-s" for="rg-svc">Service</label><select id="rg-svc" class="voicesel wide rgsel"><option value="">Let Frontly suggest</option>${Object.entries(S.specialties).map(([k, l]) => `<option value="${esc(k)}" ${r.svc === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+        <span class="lbl-s">How urgent</span><div class="chips">${[1, 2, 3, 4, 5].map(n => `<button class="chip ${+r.urgency === n ? "on" : ""}" data-act="regurg" data-v="${n}" aria-pressed="${+r.urgency === n}">${n}${n === 1 ? " · can wait" : n === 5 ? " · today" : ""}</button>`).join("")}</div>
+        <label class="lbl-s" for="rg-pref">Best time <span class="muted">(optional)</span></label><input id="rg-pref" class="cfgin wide" value="${esc(r.pref)}" placeholder="Mornings, after 3 pm, Friday" autocomplete="off"></div>` : ""}
+      ${regErr ? `<p class="err">${esc(regErr)}</p>` : ""}
+      <button class="primary block" data-act="regsave">${isNew ? (r.book ? "Save and book" : "Save") : "Add the request"}</button>
     </div>`;
   }
   let planId = "";
@@ -2651,7 +2722,8 @@ function clientApp() {
     return `<div class="deskbar"><span class="db-who"><span class="av db-av" aria-hidden="true">${esc(initials(st.deskUser))}</span><span class="db-t"><b>${esc(st.deskUser)}</b><small>${today ? `Booked today: ${today}` : "Front desk"}</small></span></span>
       <span class="db-acts">${S.line && S.line.on ? `<button class="dbb accent ${S.line.busy ? "busy" : ""}" data-act="line-sync" ${S.line.busy ? "disabled" : ""} aria-label="Check the phone line for new calls">${S.line.busy ? SPIN_SVG : LINE_SVG}<span>${S.line.busy ? "Checking" : "Check line"}</span></button>` : ""}<button class="dbb icon-only" data-act="signout" aria-label="Sign out" title="Sign out">${SIGNOUT_SVG}</button></span></div>
       <div class="segbar"><div class="seg wide">${[["waiting", "To book"], ["booked", "Booked"], ["closed", "Other"], ["all", "All"]].map(([v, l]) => `<button class="${deskFilter === v ? "on" : ""}" data-act="dfilter" data-v="${v}">${l} <i>${sets[v].length}</i></button>`).join("")}</div></div>
-      ${list.length ? `<div class="queue">${groupByPatient(list).map(g => g.length === 1 ? queueCard(g[0]) : groupCard(g)).join("")}</div>` : `<div class="empty"><h2>${deskFilter === "waiting" ? "Nobody is waiting" : "Nothing here yet"}</h2><p>${deskFilter === "waiting" ? `When someone calls, ${esc(S.assistant)}'s note lands here. Try it yourself on the Call tab.` : "Calls show up here as you work through them."}</p>${deskFilter === "waiting" ? `<button class="primary" data-act="tab" data-v="call">Make a call</button>` : ""}</div>`}`;
+      ${list.length ? `<div class="queue">${groupByPatient(list).map(g => g.length === 1 ? queueCard(g[0]) : groupCard(g)).join("")}</div>
+        <div class="reg-row"><button class="dbb" data-act="regopen" data-v="new">${PLUS_SVG}<span>Register someone</span></button></div>` : `<div class="empty"><h2>${deskFilter === "waiting" ? "Nobody is waiting" : "Nothing here yet"}</h2><p>${deskFilter === "waiting" ? `When someone calls, ${esc(S.assistant)}'s note lands here. Someone at the desk or on your own phone line? Register them here.` : "Calls show up here as you work through them."}</p>${deskFilter === "waiting" ? `<div class="aic-btns center"><button class="primary" data-act="regopen" data-v="new">Register someone</button><button class="sm" data-act="tab" data-v="call">Make a call</button></div>` : ""}</div>`}`;
   }
   // A patient with several calls in the same list gets one card, the calls inside it, most urgent first
   const TRI_ORDER = ["emergency", "urgent", "soon", "routine"];
@@ -2682,7 +2754,7 @@ function clientApp() {
     const s = c.summary || {}, f = c.fields || {}, bk = c.booking;
     return `<button class="qcard" data-act="opencase" data-id="${esc(c.id)}">
       <span class="stripe tri-${esc(s.triage || "routine")}"></span>
-      <span class="q-top">${c.status === "noted" ? statusPill(c) : triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Phone</span>` : ""}${c.isNew ? `<span class="pill">New ${esc(word("client"))}</span>` : ""}${intentPill(c)}${(c.again || []).length ? `<span class="pill warn">Called ${c.again.length + 1}×</span>` : ""}<span class="q-when">${esc(rel(c.at))}</span></span>
+      <span class="q-top">${c.status === "noted" ? statusPill(c) : triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Phone</span>` : c.source === "desk" ? `<span class="pill soft">✎ Front desk</span>` : ""}${c.isNew ? `<span class="pill">New ${esc(word("client"))}</span>` : ""}${intentPill(c)}${(c.again || []).length ? `<span class="pill warn">Called ${c.again.length + 1}×</span>` : ""}<span class="q-when">${esc(rel(c.at))}</span></span>
       <b class="q-name">${esc(callName(c))}${f.age ? `<small>, ${esc(f.age)}</small>` : ""}</b>
       <span class="q-why">${esc(s.reason || f.complaint || "No reason given")}</span>
       <span class="chips">${f.pain != null ? `<span class="pill">Pain ${esc(f.pain)}/10</span>` : ""}${f.urgency != null ? `<span class="pill">Urgency ${esc(f.urgency)}/5</span>` : ""}${c.mood ? `<span class="pill">${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}</span>` : ""}${f.preferred ? `<span class="pill soft">${esc(clip(f.preferred, 34))}</span>` : ""}</span>
@@ -2892,19 +2964,19 @@ function clientApp() {
     const s = c.summary || {}, f = c.fields || {}, pt = byPatient(c.patientId);
     const past = pt ? (pt.appts || []).filter(a => a.callId !== c.id).sort((a, b) => b.at - a.at) : [];
     el.innerHTML = `<div class="sh-head"><h2>${esc(callName(c))}</h2><button class="link" data-act="caseclosesheet">Done</button></div><div class="sh-body">
-      <div class="sumbox">${s.kind === "ai" ? `<span class="badge-ai">✦ AI note by ${PN[s.provider] || "AI"}</span>` : `<span class="badge-ex">Note · no AI</span>`}
+      <div class="sumbox">${s.kind === "ai" ? `<span class="badge-ai">✦ AI note by ${PN[s.provider] || "AI"}</span>` : s.kind === "desk" ? `<span class="badge-ex">Registered at the front desk</span>` : `<span class="badge-ex">Note · no AI</span>`}
         <p class="sum-t">${esc(s.text || "")}</p>
-        <div class="chips">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Real phone call</span>` : ""}${s.priority ? `<span class="pill">Priority ${esc(s.priority)}/5</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}${c.isNew ? `<span class="pill">New ${esc(word("client"))}</span>` : ""}${intentPill(c)}</div>
+        <div class="chips">${triagePill(s.triage)}${c.source === "phone" ? `<span class="pill line">📞 Real phone call</span>` : c.source === "desk" ? `<span class="pill soft">✎ Front desk</span>` : ""}${s.priority ? `<span class="pill">Priority ${esc(s.priority)}/5</span>` : ""}${s.specialty ? `<span class="pill">${esc(S.specialties[s.specialty] || s.specialty)}</span>` : ""}${c.isNew ? `<span class="pill">New ${esc(word("client"))}</span>` : ""}${intentPill(c)}</div>
         ${(c.again || []).length ? `<p class="note">↩ Called again ${c.again.map(id => byCall(id)).filter(Boolean).map(x => esc(rel(x.at))).join(", ")}: ${c.again.map(id => byCall(id)).filter(Boolean).map(x => `<button class="link small" data-act="opencase" data-id="${esc(x.id)}">read</button>`).join(" ")}</p>` : ""}
         ${c.delivered ? `<p class="note">✉ ${esc(S.assistant)} passed on the front desk's message: “${esc(c.delivered)}”</p>` : ""}
         ${(s.flags || []).length ? `<div class="chips">${s.flags.map(x => `<span class="pill flag">⚠ ${esc(x)}</span>`).join("")}</div>` : ""}
       </div>
       <h3 class="sec2">Booking</h3>${bookingHTML(c)}
-      <h3 class="sec2">What ${esc(S.assistant)} learned</h3>
+      <h3 class="sec2">${c.source === "desk" ? "Details" : `What ${esc(S.assistant)} learned`}</h3>
       <dl class="facts">${[["Phone", c.phone], ...fieldRows(f).map(([k, l]) => [l, k === "pain" && f[k] != null ? f[k] + "/10" : k === "urgency" && f[k] != null ? f[k] + "/5 (the caller's own rating)" : f[k]])].filter(x => x[1] != null && x[1] !== "").map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join("")}
         ${c.mood ? `<div><dt>Mood</dt><dd>${S.moods[c.mood.label] || ""} ${esc(c.mood.label)}${c.mood.note ? " · " + esc(c.mood.note) : ""} <em class="tag ai">✦ AI</em></dd></div>` : ""}
         <div><dt>Call</dt><dd>${esc(whenFull(c.at))} · ${mmss(c.dur || 0)}${c.source === "phone" ? ` · phone line, answered by ${PN[c.provider] || "the voice agent"}` : c.engine === "ai" ? ` · ✦ AI by ${PN[c.provider] || "AI"}` : " · script, no AI"}</dd></div></dl>
-      <button class="link small" data-act="txtoggle">${showTx ? "Hide the call" : "Read the whole call"}</button>
+      ${(c.transcript || []).length ? `<button class="link small" data-act="txtoggle">${showTx ? "Hide the call" : "Read the whole call"}</button>` : ""}
       ${showTx ? `<div class="c-log flat">${(c.transcript || []).map(l => `<p class="bub ${l.who}">${esc(l.t)}</p>`).join("")}</div>` : ""}
       <h3 class="sec2">${esc(word("Client"))}</h3>
       ${pt ? `<button class="crow" data-act="openpat" data-id="${esc(pt.id)}"><span class="av">${esc(initials(pt.name))}</span><span class="grow"><b>${esc(pt.name)}</b><small>${pt.age ? esc(pt.age) + " · " : ""}${esc(pt.phone)} · ${esc(word("client"))} since ${esc(new Date(pt.since).getFullYear())}</small></span><span class="chev">›</span></button>
@@ -2984,7 +3056,7 @@ function clientApp() {
     }
     groups = groups.filter(g => g.rows.length);
     return `<div class="ptools">
-        <div class="search"><input id="pq" type="search" placeholder="Name or phone number" autocomplete="off" aria-label="Find a ${esc(word("client"))}"></div>
+        <div class="srch-row"><div class="search"><input id="pq" type="search" placeholder="Name or phone number" autocomplete="off" aria-label="Find a ${esc(word("client"))}"></div><button class="dbb accent" data-act="regopen" data-v="new" aria-label="Add a ${esc(word("client"))}">${PLUS_SVG}<span>Add</span></button></div>
         <div class="seg wide" role="tablist" aria-label="Show">${PAT_FILTERS.map(([v, l]) => `<button class="${patFilter === v ? "on" : ""}" data-act="pfilter" data-v="${v}" aria-pressed="${patFilter === v}">${l} <i>${count(v)}</i></button>`).join("")}</div>
         <div class="pgroup"><span>Group by</span>${[["status", "Status"], ["recent", "Last contact"], ["az", "Name"]].map(([v, l]) => `<button class="chip ${grp === v ? "on" : ""}" data-act="pgroup" data-v="${v}" aria-pressed="${grp === v}">${l}</button>`).join("")}</div>
       </div>
@@ -3148,7 +3220,7 @@ function clientApp() {
     const cl = S.calls.filter(c => c.patientId === p.id);
     el.innerHTML = `<div class="sh-head"><h2>${esc(p.name)}</h2><button class="link" data-act="patclose">Done</button></div><div class="sh-body">
       ${patEdit === p.id ? patForm(p) : `<dl class="facts"><div><dt>Phone</dt><dd>${esc(p.phone)}</dd></div>${p.age ? `<div><dt>Age</dt><dd>${esc(p.age)}</dd></div>` : ""}<div><dt>${esc(word("Client"))} since</dt><dd>${esc(new Date(p.since).toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</dd></div></dl>
-      <button class="dbb pe-btn" data-act="patedit" data-id="${esc(p.id)}">${EDIT_SVG}<span>Edit details</span></button>`}
+      <div class="pe-row"><button class="dbb" data-act="patedit" data-id="${esc(p.id)}">${EDIT_SVG}<span>Edit details</span></button><button class="dbb accent" data-act="regopen" data-v="${esc(p.id)}">${PLUS_SVG}<span>New request</span></button></div>`}
       <h3 class="sec2">Coming up</h3>
       ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || "")}</small></div><button class="sm danger ${patArmed === a.id ? "armed" : ""}" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">${patArmed === a.id ? "Confirm" : "Cancel"}</button></div>`).join("") : `<p class="muted">Nothing booked.</p>`}
       <h3 class="sec2">Message for ${esc(p.name.split(" ")[0])}</h3>
@@ -3177,7 +3249,7 @@ function clientApp() {
     if (caseId && !byCall(caseId)) caseId = "";
     if (patId && !byPatient(patId)) patId = "";
     if (tab !== "patients" || document.activeElement !== $("#pq")) render(); else renderChrome();
-    renderCase(); renderPat(); renderAI(); renderCfg(); renderPlan(); renderImp();
+    renderCase(); renderPat(); renderAI(); renderCfg(); renderPlan(); renderImp(); renderReg();
   };
   function signIn() {
     const who = ($("#dwho") || {}).value, pin = ($("#dpin") || {}).value;
@@ -3332,6 +3404,20 @@ function clientApp() {
       case "toggle": S.settings[v] = !S.settings[v]; send("set", { k: v, v: S.settings[v] }); renderCfg(); renderAI(); break;
       case "aiopen": aiOpen = true; renderAI(); send("state", {}); break;   // fresh token counts
       case "cfgopen": cfgOpen = true; renderCfg(); break;
+      case "regopen": regFor = v; regErr = ""; reg = { name: "", phone: "", age: "", note: "", reason: "", svc: "", pref: "", urgency: 0, book: true }; renderReg(); $("#regsheet").scrollTop = 0; setTimeout(() => { const f = $(v === "new" ? "#rg-name" : "#rg-reason"); if (f) f.focus(); }, 60); break;
+      case "regclose": regFor = ""; renderReg(); break;
+      case "regurg": readReg(); reg.urgency = +reg.urgency === +v ? 0 : +v; renderReg(); break;
+      case "regsave": {
+        readReg();
+        const isNew = regFor === "new", data = { name: reg.name, phone: reg.phone, age: reg.age, note: reg.note, reason: reg.reason, service: reg.svc, urgency: reg.urgency, preferred: reg.pref, book: isNew ? !!reg.book : true, patient: regFor };
+        send(isNew ? "pat-add" : "desk-request", data, (ok, msg) => {
+          if (!ok) { regErr = msg || "Couldn't save"; renderReg(); return; }
+          regFor = ""; renderReg();
+          const [kind, id] = String(msg || "").split(":");
+          if (kind === "case") { patId = ""; renderPat(); openCase(id); } else if (kind === "pat") { patId = id; renderPat(); }
+        });
+        break;
+      }
       case "impopen": impKind = v; if (S.importing && S.importing.kind !== v) send("import-cancel", {}); renderImp(); $("#impsheet").scrollTop = 0; break;
       case "impclose": if (S.importing) send("import-cancel", {}); impKind = ""; renderImp(); break;
       case "impagain": send("import-cancel", {}); break;
@@ -3390,7 +3476,9 @@ function clientApp() {
     if (c.contains("ttsvoicesel")) { S.settings.ttsVoice = e.target.value; send("set", { k: "ttsVoice", v: e.target.value }); return; }
     if (c.contains("ttsmodelsel")) { S.settings.ttsModel = e.target.value; send("set", { k: "ttsModel", v: e.target.value }); renderCfg(); return; }
     if (c.contains("ttsinstr")) { S.settings.ttsInstructions = e.target.value.trim(); send("set", { k: "ttsInstructions", v: S.settings.ttsInstructions }); return; }
-    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && !c.contains("bizsel") && !c.contains("plancfg") && !c.contains("planlink") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
+    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && !c.contains("bizsel") && !c.contains("rgsel") && !c.contains("plancfg") && !c.contains("planlink") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
+    if (e.target.id === "rg-book") { readReg(); renderReg(); return; }   // the request part shows or hides
+    if (c.contains("rgsel")) { readReg(); return; }
     if (c.contains("bizsel")) { dent = null; send("business", { v: e.target.value }); return; }
     if (c.contains("plancfg")) { send("planner-cfg", { id: planId, k: e.target.dataset.k, v: e.target.value }); return; }
     if (c.contains("planlink")) { send("planner-link", { id: planId, staff: e.target.dataset.staff, ext: e.target.value }); return; }
@@ -3635,6 +3723,14 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 #casesheet,#patsheet{z-index:11}
 #plansheet{z-index:13}
 #impsheet{z-index:14}
+#regsheet{z-index:12}
+.srch-row{display:flex;gap:8px;align-items:center}
+.srch-row .search{flex:1;min-width:0}
+.pe-row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 2px}
+.reg-row{display:flex;justify-content:center;padding:14px 0 4px}
+.aic-btns.center{justify-content:center}
+.rg-sw{display:flex;align-items:center;gap:10px;padding:12px 2px;font-size:calc(15px * var(--ts))}
+.rg-sw input{width:22px;height:22px;accent-color:var(--signal)}
 .imp-ex{background:var(--sheet);border:1px solid var(--rule);border-radius:12px;padding:10px 12px;font-size:calc(12.5px * var(--ts));overflow-x:auto;white-space:pre;margin:8px 0 12px}
 .block-s{display:block;margin:10px auto 0}
 .lrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--rule)}
@@ -4020,6 +4116,7 @@ const buildHTML = () => `<!doctype html><html lang="en" data-theme="${initTheme}
 <div id="cfgsheet" class="sheet" aria-label="Settings"></div>
 <div id="plansheet" class="sheet" aria-label="Planning service"></div>
 <div id="impsheet" class="sheet" aria-label="Import"></div>
+<div id="regsheet" class="sheet" aria-label="Register"></div>
 <div id="bpabout" aria-hidden="true"></div>
 <div id="toast" role="status"></div>
 <script>
