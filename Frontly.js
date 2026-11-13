@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.9.0';
+const VERSION = '1.10.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -112,6 +112,7 @@ const CONFIG = [
   ["Booking", [
     { k: "daysAhead", label: "Days to offer", help: "How far ahead the front desk can book", unit: "days", def: 10, min: 3, max: 30, step: 1 },
     { k: "slotMinutes", label: "Appointment length", unit: "min", def: 30, min: 15, max: 60, step: 15 },
+    { k: "visitLengths", label: "Visit lengths to offer", help: "Minutes, from 5 to 180, separated by commas", type: "text", def: "5, 10, 15, 20, 30, 40, 45, 60, 75, 90, 120, 150, 180" },
     { k: "visitGapDays", label: "Days between a {client}'s {visits}", help: "0 allows two visits on one day (never at the same time); 1 keeps them on different days", unit: "days", def: 1, min: 0, max: 14, step: 1 },
     { k: "surgeryGapDays", only: "dental", label: "Days between two surgeries", help: "Healing time before the same patient can have another surgery", unit: "days", def: 14, min: 0, max: 60, step: 1 },
   ]],
@@ -170,6 +171,7 @@ const TEMPLATES = {
       { k: "general", l: "General dentistry" },
     ],
     order: ["general", "endo", "surgery", "ortho", "hygiene", "kids"],   // how the services are listed
+    len: { general: 30, endo: 60, surgery: 90, ortho: 30, hygiene: 45, kids: 30 },   // usual minutes (Settings › Business)
     heals: "surgery",   // the service that needs time to heal between two visits (Settings › Booking)
     ask: ["name", "age", "complaint", "location", "pain", "urgency", "preferred", "notes"],
     labels: { complaint: "Reason", location: "Where", pain: "Pain" },
@@ -197,6 +199,7 @@ const TEMPLATES = {
       { k: "general", l: "Repairs" },
     ],
     order: ["general", "service", "diag", "brakes", "tyres", "electric", "body"],
+    len: { general: 60, service: 60, diag: 45, brakes: 90, tyres: 30, electric: 60, body: 120 },
     heals: "",
     ask: ["name", "complaint", "location", "urgency", "preferred", "notes"],
     labels: { complaint: "Problem", location: "Car" },
@@ -234,6 +237,7 @@ const TEMPLATES = {
       { k: "general", l: "General enquiries" },
     ],
     order: ["general", "consult", "follow", "docs"],
+    len: { general: 30, consult: 60, follow: 30, docs: 30 },
     heals: "",
     ask: ["name", "complaint", "urgency", "preferred", "notes"],
     labels: { complaint: "Reason" },
@@ -315,14 +319,37 @@ function visitConflict(appts, at, spec, o) {
   for (const a of appts || []) {
     if (a.id && a.id === o.ignore) continue;
     const live = a.status === "booked", dd = Math.round(Math.abs(day(a.at) - day(at)) / 864e5), with_ = o.docName(a.doctor);
-    if (live && Math.abs(a.at - at) < o.slotMin * 60e3) return `Already booked at ${hm(a.at)} with ${with_}`;
+    const len = (o.dur || o.slotMin) * 60e3, aLen = (a.dur || o.slotMin) * 60e3;   // visits have lengths: no overlap
+    if (live && at < a.at + aLen && a.at < at + len) return `Already booked at ${hm(a.at)} with ${with_}`;
     if (live && o.gapDays > 0 && dd < o.gapDays) return dd === 0 ? `Already has a ${o.visit || "visit"} that day: ${hm(a.at)} with ${with_}` : `Less than ${o.gapDays} days from the ${o.visit || "visit"} on ${date(a.at)}`;
     if ((live || a.status === "done") && spec === "surgery" && o.specOf(a) === "surgery" && dd < o.surgeryDays)
       return `Within ${o.surgeryDays} days of the surgery on ${date(a.at)}: time to heal`;
   }
   return "";
 }
-const ruleOpts = (ignore) => ({ slotMin: cfg("slotMinutes"), gapDays: cfg("visitGapDays"), surgeryDays: cfg("surgeryGapDays"), ignore,
+// A visit length the caller asked for ("an hour", "30 minutes", "pusvalandžio", "pusantros valandos"), in minutes, or 0.
+// Only from sentences about the visit, so "it has hurt for two hours" doesn't count. Self-contained: also in the page.
+function askedLength(text) {
+  const visit = /(book|appointment|visit|slot|need|take|takes|long|reserve|session|vizit|registr|rezerv|truk|reik|laik|užsira|seans)/i;
+  for (const raw of String(text || "").toLowerCase().split(/[.!?\n]+/)) {
+    const t = raw.trim();
+    if (!t || !visit.test(t) || /(ago|since|for (the )?(last|past)|jau|nuo|prieš)/.test(t)) continue;
+    let m = t.match(/(\d+(?:[.,]5)?)\s*(?:h\b|hours?|hrs?|val\b|val\.|valand\w*)/);
+    if (m) return Math.round(parseFloat(m[1].replace(",", ".")) * 60);
+    m = t.match(/(\d{1,3})\s*(?:min\b|mins?\b|minutes?|minut\w*|min\.)/);
+    if (m) return +m[1];
+    if (/(hour and a half|an hour and a half|one and a half hours?|pusantros valandos|pusantrą valandą)/.test(t)) return 90;
+    if (/(two hours|dvi valandas|dviem valandom)/.test(t)) return 120;
+    if (/(half an hour|half-hour|half hour|pusvaland|pusę valandos|pusė valandos)/.test(t)) return 30;
+    if (/(an hour|one hour|a full hour|valandai|valandą|valanda\b)/.test(t)) return 60;
+  }
+  return 0;
+}
+// The lengths offered (Settings › Booking), and the one nearest to any number of minutes
+const lengths = () => { const l = [...new Set(String(cfg("visitLengths") || "").split(/[^0-9]+/).map(Number).filter(n => n >= 5 && n <= 180))].sort((a, b) => a - b); return l.length ? l : [15, 30, 45, 60, 90, 120]; };
+const snapLen = n => lengths().reduce((b, x) => Math.abs(x - n) < Math.abs(b - n) ? x : b, lengths()[0]);
+const serviceLen = k => { const own = (settings.serviceLen || {})[k]; return own ? snapLen(own) : BIZ.len && BIZ.len[k] ? snapLen(BIZ.len[k]) : snapLen(cfg("slotMinutes")); };
+const ruleOpts = (ignore, dur) => ({ slotMin: cfg("slotMinutes"), dur: dur || 0, gapDays: cfg("visitGapDays"), surgeryDays: cfg("surgeryGapDays"), ignore,
   specOf: a => a.spec || ((ALL_DOCTORS.find(d => d.id === a.doctor) || {}).spec || [])[0], docName: id => (ALL_DOCTORS.find(d => d.id === id) || {}).short || "the " + WORDS.staff, visit: WORDS.visit });
 const DESK_STAFF = ["Agnė Petrauskaitė", "Mantas Jonaitis"];
 const DEMO_PIN = "1234";
@@ -960,6 +987,8 @@ async function aiSummary(c) {
       specialty: "one specialty id", doctor: `the best ${WORDS.staff} id`, flags: [BIZ.flags],
       hint: "a booking suggestion in at most 12 words", mood: { label: "calm|cheerful|worried|anxious|in pain|frustrated|upset|unsure", score: "-2 to 2", note: "at most 8 words on how the caller sounded" },
       fields: "the details object, corrected from the call, in English",
+      duration: `minutes the visit needs, one of ${lengths().join(", ")}: what the caller asked for if they did, otherwise your estimate from the reason`,
+      duration_why: "a few words: \"asked for an hour\", or why that long (e.g. \"root canal: 60 min\")",
       intent: "why they called: new_visit (a new problem or a new visit), about_visit (a question about a visit already booked, such as when or with whom), change_visit (move or cancel a booked visit) or other",
     },
   });
@@ -973,6 +1002,7 @@ async function aiSummary(c) {
     specialty: SPECIALTIES[j.specialty] ? j.specialty : tpl.specialty, doctor: docById(j.doctor) ? j.doctor : tpl.doctor,
     reason: String(j.reason || tpl.reason).slice(0, 60), flags: Array.isArray(j.flags) ? j.flags.map(String).slice(0, 5) : tpl.flags,
     hint: String(j.hint || tpl.hint).slice(0, 100), mood: cleanMood(j.mood), intent: INTENTS.includes(j.intent) ? j.intent : "",
+    dur: +j.duration >= 5 && +j.duration <= 180 ? snapLen(+j.duration) : 0, durWhy: String(j.duration_why || "").slice(0, 80),
   };
 }
 // The call ends: link it to the patient (a new caller gets a record), write the note, keep it for the front desk.
@@ -1029,7 +1059,7 @@ function patientsBrief() {
     const history = [last ? `Last visit ${d(last)}: ${last.reason}` : "", next ? `Booked ${d(next)}: ${next.reason}` : ""].filter(Boolean).join(". ");
     const when = t => new Date(t).toLocaleString("en-GB", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
     const appointments = (p.appts || []).filter(a => a.status === "booked" && a.at > Date.now()).sort((a, b) => a.at - b.at)
-      .map(a => { const doc = docById(a.doctor) || {}; return `${when(a.at)} with ${doc.name || "a " + WORDS.staff}${doc.role ? " (" + doc.role + ")" : ""}: ${a.reason || "visit"}`; }).join("; ");
+      .map(a => { const doc = docById(a.doctor) || {}; return `${when(a.at)} with ${doc.name || "a " + WORDS.staff}${doc.role ? " (" + doc.role + ")" : ""}: ${a.reason || "visit"}${a.dur ? ` (${a.dur} min)` : ""}`; }).join("; ");
     const w = calls.find(c => c.patientId === p.id && c.status === "waiting");
     const waiting = w ? `${(w.summary || {}).reason || (w.fields || {}).complaint || "a request"}, from ${when(w.at)}; the front desk will call back to book it` : "";
     return { name: p.name, age: p.age || null, phone: p.phone, history, appointments, waiting, message: p.message ? p.message.text : "", messageId: p.message ? p.message.id : "" };
@@ -1154,16 +1184,19 @@ async function bookCall(m) {
   let pt = c.patientId && patients.find(p => p.id === c.patientId);
   const move = pt && m.move && (pt.appts || []).find(a => a.id === m.move && a.status === "booked");
   const spec = (move && (move.spec || ruleOpts().specOf(move))) || (c.summary && c.summary.specialty) || doc.spec[0];
-  const why = pt ? visitConflict(pt.appts, at, spec, ruleOpts(move && move.id)) : "";
+  const dur = +m.dur >= 5 && +m.dur <= 180 ? Math.round(+m.dur) : (move && move.dur) || cfg("slotMinutes");
+  const clash = patients.some(p => (p.appts || []).some(a => a !== move && a.doctor === doc.id && a.status === "booked" && at < a.at + (a.dur || cfg("slotMinutes")) * 60e3 && a.at < at + dur * 60e3));
+  if (clash) return `${doc.short} already has someone then`;
+  const why = pt ? visitConflict(pt.appts, at, spec, ruleOpts(move && move.id, dur)) : "";
   if (why) return why;
   const reason = (move && move.reason) || (c.summary && c.summary.reason) || c.fields.complaint || "Visit";
   let ext = null;
-  const info = bookingInfo(c, pt);
-  if (plannerId() !== "builtin") { try { ext = await bookAtEngine(c, pt, doc, at, reason, info); } catch (e) { return String(e.message || e); } }
+  const info = Object.assign(bookingInfo(c, pt), { len: dur, lenWhy: String(m.durWhy || "").slice(0, 80) });
+  if (plannerId() !== "builtin") { try { ext = await bookAtEngine(c, pt, doc, at, reason, info, dur); } catch (e) { return String(e.message || e); } }
   if (!pt) { pt = { id: "p-" + Date.now().toString(36), name: c.fields.name || "Caller " + c.phone, age: c.fields.age || null, phone: c.phone, since: Date.now(), notes: [], appts: [] }; patients.push(pt); c.patientId = pt.id; }
   if (ext && ext.client) pt.ext = Object.assign({}, pt.ext, { [ext.planner]: ext.client });
   pt.appts = pt.appts || [];
-  const a = { id: "a-" + Date.now().toString(36), at, doctor: doc.id, spec, reason, callId: c.id, status: "booked", by: settings.deskUser, made: Date.now() };
+  const a = { id: "a-" + Date.now().toString(36), at, dur, doctor: doc.id, spec, reason, callId: c.id, status: "booked", by: settings.deskUser, made: Date.now() };
   a.info = info;   // what Frontly knew when it was booked: the client's page shows it under Details
   if (ext) a.ext = { planner: ext.planner, ref: ext.ref, note: ext.note };   // booked there too, with that much of the story
   pt.appts.push(a);
@@ -1172,7 +1205,7 @@ async function bookCall(m) {
     const oc = move.callId && calls.find(x => x.id === move.callId);
     if (oc && oc !== c && oc.booking) oc.booking.movedTo = at;
   }
-  c.status = "booked"; c.booking = { doctor: doc.id, at, by: settings.deskUser, made: Date.now() };
+  c.status = "booked"; c.booking = { doctor: doc.id, at, dur, by: settings.deskUser, made: Date.now() };
   if (move) c.booking.movedFrom = move.at;
   return "";
 }
@@ -1206,7 +1239,7 @@ async function aiPlan(m) {
   const sys = `You plan appointments for the front desk of ${BIZ.kind}. Choose the best time from the candidates only. Weigh how urgent it is, what the caller asked for, the right ${WORDS.staff}, and the ${WORDS.client}'s other ${WORDS.visits}: keep them apart${BIZ.planNote}. Be brief and practical. Reply with JSON only.`;
   const user = JSON.stringify({
     today: when(Date.now()),
-    request: { summary: s.text, reason: s.reason, triage: s.triage, priority: s.priority, service: SPECIALTIES[s.specialty] || s.specialty, preferred_time: f.preferred, notes: f.notes, moving_the_visit_on: move ? when(move.at) : null },
+    request: { length_minutes: +m.dur || cfg("slotMinutes"), summary: s.text, reason: s.reason, triage: s.triage, priority: s.priority, service: SPECIALTIES[s.specialty] || s.specialty, preferred_time: f.preferred, notes: f.notes, moving_the_visit_on: move ? when(move.at) : null },
     patient_visits: pt ? (pt.appts || []).filter(a => a.at > Date.now() - 120 * DAY).map(a => ({ when: when(a.at), with: (docById(a.doctor) || {}).name, service: SPECIALTIES[ruleOpts().specOf(a)] || ruleOpts().specOf(a), reason: a.reason, status: a.status })) : [],
     rules: Object.assign({ days_between_visits: cfg("visitGapDays") }, BIZ.heals ? { days_between_surgeries: cfg("surgeryGapDays") } : {}),
     candidates: cands.map((x, i) => ({ i, when: when(+x.at), with: docById(x.doctor).name, role: docById(x.doctor).role, matches_caller_preference: !!x.pref })),
@@ -1396,7 +1429,7 @@ function bookingNote(info, pt, level) {
   const L = FIELD_NAMES(), when = t => new Date(t).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   const src = info.source === "phone" ? "Real phone call" + (info.provider ? " (" + info.provider + ")" : "") : info.source === "desk" ? "Registered at the front desk" : "Call in Frontly";
   const head = [`Booked by Frontly${info.by ? " (" + info.by + ")" : ""}, ${when(info.at)}`, `${src}, ${when(info.callAt)}${info.dur ? `, ${Math.round(info.dur / 60)} min` : ""}`,
-    `Reason: ${info.reason || "-"}`, `Triage: ${info.triage || "-"}${info.priority ? `, priority ${info.priority}/5` : ""}${info.service ? `, ${info.service}` : ""}`].concat(info.flags.length ? [`Warnings: ${info.flags.join("; ")}`] : []);
+    `Reason: ${info.reason || "-"}`, `Triage: ${info.triage || "-"}${info.priority ? `, priority ${info.priority}/5` : ""}${info.service ? `, ${info.service}` : ""}`].concat(info.len ? [`Length: ${info.len} min${info.lenWhy ? " (" + info.lenWhy + ")" : ""}`] : [], info.flags.length ? [`Warnings: ${info.flags.join("; ")}`] : []);
   if (level === 2) return head.slice(0, 3).join("\n").slice(0, 380);
   const fields = Object.entries(info.fields).filter(([k]) => k !== "name").map(([k, v]) => `${L[k] || k}: ${k === "pain" ? v + "/10" : k === "urgency" ? v + "/5" : v}`);
   const mid = [].concat(info.summary ? ["", "Summary" + (info.noteBy ? ` (${info.noteBy})` : "") + ":", info.summary] : [], fields.length ? ["", "Details:"].concat(fields) : [],
@@ -1408,10 +1441,10 @@ function bookingNote(info, pt, level) {
   return head.concat(mid, talk).join("\n").slice(0, 8000);
 }
 // Books at the engine first; Frontly keeps its copy only when that worked
-async function bookAtEngine(c, pt, doc, at, why, info) {
+async function bookAtEngine(c, pt, doc, at, why, info, dur) {
   const id = plannerId(), P = PLANNERS[id], ext = doc.ext && doc.ext[id];
   if (!ext) throw new Error(`${doc.short} isn't linked to ${P.label} yet: Settings › Planning › ${P.label}`);
-  const len = cfg("slotMinutes") * 60e3;   // each booking lasts the appointment length; the engine's step only spaces the times
+  const len = (dur || cfg("slotMinutes")) * 60e3;   // the visit's length; the engine's step only spaces the times
   await loadDiary(at, at, true);   // the time again, live: someone may have taken it in the meantime
   const sh = ((extDiary.shifts || {})[doc.id] || []).find(x => at >= x.start && at + len <= x.end);
   if (extDiary.err) throw new Error(extDiary.err);
@@ -1550,6 +1583,7 @@ function clientState() {
       fields: (P.fields || []).map(({ k, label, type, list, help, def }) => ({ k, label, type, list, help, def })), clients: !!P.clients, inspect: !!P.inspect, cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
     ext: extDiary && extDiary.id === plannerId() ? extDiary : null,
     importing: importView(pendingImport),
+    lengths: lengths(), serviceLens: Object.fromEntries(Object.keys(SPECIALTIES).map(k => [k, serviceLen(k)])),
     doctors: DOCTORS, allDoctors: ALL_DOCTORS, specialties: SPECIALTIES, words: WORDS, business: settings.business || "dental",
     templates: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { label: t.label, words: t.words, staffName: t.staffName, staffShort: t.staffShort, staffRole: t.staffRole }])),
     ask: BIZ.ask, fieldLabels: Object.assign({}, FIELD_LABELS, BIZ.labels), customised: !!(settings.services || settings.words), staff: DESK_STAFF, demoPin: DEMO_PIN, moods: MOODS,
@@ -1848,6 +1882,11 @@ async function handle(m) {
       (settings.doctors || []).forEach(d => { d.spec = (d.spec || []).filter(k => k !== m.k); if (!d.spec.length) d.spec = [left[0][0]]; });
       setBusiness(); setDoctors(); saveAll(); return push();
     }
+    case "svc-len": {
+      if (!SPECIALTIES[m.k]) return;
+      settings.serviceLen = Object.assign({}, settings.serviceLen, { [m.k]: Math.round(+m.v) || undefined });
+      saveAll(); return push();
+    }
     case "svc-reset": delete settings.services; delete settings.words; setBusiness(); saveAll(); toast("Words and services as the template has them"); return push();
     case "doctor-save": {
       const err = saveDoctor(m.doctor);
@@ -2033,6 +2072,8 @@ function clientApp() {
       <div class="cfg"><div class="cfg-h"><b>Services</b></div><small class="muted">What callers come for. Each ${word("staff")} picks theirs; ${esc(S.assistant)}'s note suggests one.</small>
         <div class="chips svc">${Object.entries(S.specialties).map(([k, l]) => `<span class="chip svc-c">${esc(l)}<button class="svc-x" data-act="svcdel" data-v="${esc(k)}" aria-label="Remove ${esc(l)}">×</button></span>`).join("")}</div>
         <div class="svc-add"><input id="svcnew" class="cfgin wide" placeholder="Add a service" autocomplete="off"><button class="sm" data-act="svcadd">Add</button></div></div>
+      <div class="cfg"><div class="cfg-h"><b>How long each usually takes</b></div><small class="muted">The length suggested when a call is about it, unless the caller asks for another or the AI judges otherwise.</small>
+        ${Object.entries(S.specialties).map(([k, l]) => `<div class="lrow"><b>${esc(l)}</b><select class="voicesel svclen" data-k="${esc(k)}" aria-label="${esc(l)}: usual length">${(S.lengths || []).map(m => `<option value="${m}" ${(S.serviceLens || {})[k] === m ? "selected" : ""}>${fmtLen(m)}</option>`).join("")}</select></div>`).join("")}</div>
       ${S.customised ? `<div class="srow"><div class="grow"><b>Back to the template's words and services</b></div><button class="sm" data-act="svcreset">Reset</button></div>` : ""}`;
   }
   function dentistsHTML() {
@@ -2862,28 +2903,46 @@ function clientApp() {
   }
 
   // The case: one call, as the receptionist sees it, with booking
-  let caseId = "", caseDoc = "", caseDay = 0, caseSlot = 0, caseArmed = "", caseBusy = false, showTx = false, caseMove = "", caseSug = null, casePick = 0;
+  let caseId = "", caseDoc = "", caseDay = 0, caseSlot = 0, caseArmed = "", caseBusy = false, showTx = false, caseMove = "", caseSug = null, casePick = 0, caseDur = 0, caseDurSug = null;
+  const fmtLen = m => m >= 60 && m % 60 === 0 ? `${m / 60} h` : m > 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+  const snapL = n => (S.lengths || [30]).reduce((b, x) => Math.abs(x - n) < Math.abs(b - n) ? x : b, (S.lengths || [30])[0]);
+  // How long the visit should be: what the caller asked for, the AI's estimate, the service's usual length, the default
+  function sugLen(c, moveId) {
+    const s = c.summary || {}, f = c.fields || {}, pt = byPatient(c.patientId), mv = moveId && pt && (pt.appts || []).find(a => a.id === moveId);
+    if (mv && mv.dur) return { min: mv.dur, why: "as the visit being moved" };
+    const said = (c.transcript || []).filter(x => x.who === "caller").map(x => x.t).concat([f.preferred, f.notes, f.complaint]).filter(Boolean).join(". ");
+    const asked = askedLength(said);
+    if (asked) return { min: snapL(asked), why: `asked for ${fmtLen(asked)}`, asked: true };
+    if (s.dur) return { min: snapL(s.dur), why: s.durWhy ? "✦ " + s.durWhy : "✦ the AI's estimate", ai: true };
+    const k = s.specialty, d = (S.serviceLens || {})[k];
+    if (d) return { min: d, why: `usual for ${(S.specialties || {})[k] || "this service"}` };
+    return { min: snapL(S.cfg.slotMinutes || 30), why: "the usual length" };
+  }
   const ymdL = t => { const d = new Date(t), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
   const CAL_SVG = `<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
   const planBusy = {};
   const hash = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return Math.abs(h); };
   const dkey = ts => { const d = new Date(ts); return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); };
-  function bookedAt(docId) {
-    const set = new Set();
-    S.patients.forEach(p => (p.appts || []).forEach(a => { if (a.doctor === docId && a.status === "booked") set.add(a.at); }));
-    return set;
+  // Booked visits for a person, as spans (a visit lasts its length)
+  const slotMs = () => (S.cfg.slotMinutes || 30) * 60e3;
+  function bookedSpans(docId, skip) {
+    const out = [];
+    S.patients.forEach(p => (p.appts || []).forEach(a => { if (a.doctor === docId && a.status === "booked" && a.id !== skip) out.push({ start: a.at, end: a.at + (a.dur ? a.dur * 60e3 : slotMs()), a, p }); }));
+    return out;
   }
+  // The length being booked (the case's), in ms; elsewhere one slot
+  const caseLen = () => (caseId && caseDur ? caseDur : S.cfg.slotMinutes || 30) * 60e3;
   // An outside planning engine (Settings › Planning): its shifts give the times, its visits and blocks take them
   const extOn = () => !!(S.planner && S.planner.id !== "builtin");
   const extFor = doc => (extOn() && doc && doc.ext && doc.ext[S.planner.id]) || "";
-  const extLen = () => (S.cfg.slotMinutes || 30) * 60e3;
+  const extLen = () => caseLen();
   const extStep = () => ((S.ext && S.ext.step) || S.cfg.slotMinutes || 30) * 60e3;
-  function extTimes(doc, day) {
-    const out = new Set(), len = extLen(), step = extStep();
+  function extTimes(doc, day, len = extLen()) {
+    const out = new Set(), step = extStep();
     (((S.ext && S.ext.shifts) || {})[doc.id] || []).forEach(x => { if (sod(x.start) !== day) return; for (let t = x.start; t + len <= x.end; t += step) out.add(t); });
     return [...out].sort((a, b) => a - b);
   }
-  const extTaken = (doc, t) => (((S.ext && S.ext.busy) || {})[doc.id] || []).some(x => t < x.end && t + extLen() > x.start);
+  const extTaken = (doc, t, len = extLen()) => (((S.ext && S.ext.busy) || {})[doc.id] || []).some(x => t < x.end && t + len > x.start);
   let diaryAsked = "";
   function needDiary(from, to) {   // ask the script for the engine's diary for days not loaded yet
     if (!extOn()) return;
@@ -2902,12 +2961,13 @@ function clientApp() {
     for (let i = 0, d = sod(Date.now()); out.length < n && i < 60; i++, d = sod(d + DAY + 3600e3)) if (doc.days.includes(new Date(d).getDay())) out.push(d);
     return out;
   }
-  const slotTimes = (doc, day) => { if (extFor(doc)) return extTimes(doc, day); if (extOn() || !doc.days.includes(new Date(day).getDay())) return [];   /* an engine's unlinked person, or a day off */ const step = (S.cfg.slotMinutes || 30) * 60e3, out = []; for (let t = day + doc.from * 3600e3; t + step <= day + doc.to * 3600e3; t += step) out.push(t); return out; };
+  // Start times every slot that leave room for len before the end of the working hours or the engine's shift
+  const slotTimes = (doc, day, len = caseLen()) => { if (extFor(doc)) return extTimes(doc, day, len); if (extOn() || !doc.days.includes(new Date(day).getDay())) return [];   /* an engine's unlinked person, or a day off */ const step = slotMs(), out = []; for (let t = day + doc.from * 3600e3; t + len <= day + doc.to * 3600e3; t += step) out.push(t); return out; };
   // rule(t): why this patient can't have that time (the booking rules), or ""
-  function slotsFor(doc, day, rule) {
-    const taken = bookedAt(doc.id);
-    return slotTimes(doc, day).filter(t => t >= Date.now() + 3600e3)   // not within the next hour
-      .map(t => ({ at: t, free: !taken.has(t) && !(extFor(doc) && extTaken(doc, t)), why: rule ? rule(t) : "" }));
+  function slotsFor(doc, day, rule, len = caseLen()) {
+    const taken = bookedSpans(doc.id, caseMove);
+    return slotTimes(doc, day, len).filter(t => t >= Date.now() + 3600e3)   // not within the next hour
+      .map(t => ({ at: t, free: !taken.some(x => t < x.end && t + len > x.start) && !(extFor(doc) && extTaken(doc, t, len)), why: rule ? rule(t) : "" }));
   }
   const usable = x => x.free && !x.why;
   // The booking rules for this call's patient (visitConflict is shared with the script)
@@ -2918,7 +2978,7 @@ function clientApp() {
     if (!pt) return null;
     const mv = moveId && (pt.appts || []).find(a => a.id === moveId), doc = docOf(docId) || {};
     const spec = (mv && specOfAppt(mv)) || (c.summary || {}).specialty || (doc.spec || [])[0];
-    const o = { slotMin: S.cfg.slotMinutes || 30, gapDays: S.cfg.visitGapDays == null ? 1 : S.cfg.visitGapDays, surgeryDays: S.cfg.surgeryGapDays == null ? 14 : S.cfg.surgeryGapDays,
+    const o = { slotMin: S.cfg.slotMinutes || 30, dur: caseDur || 0, gapDays: S.cfg.visitGapDays == null ? 1 : S.cfg.visitGapDays, surgeryDays: S.cfg.surgeryGapDays == null ? 14 : S.cfg.surgeryGapDays,
       ignore: moveId || "", specOf: specOfAppt, docName: id => (docOf(id) || {}).short || "the " + word("staff"), visit: word("visit") };
     return t => visitConflict(pt.appts, t, spec, o);
   }
@@ -2989,6 +3049,7 @@ function clientApp() {
     const up = upcomingOf(byPatient(c.patientId));
     caseMove = c.status === "waiting" && c.intent === "change_visit" && up.length ? ((c.plan && c.plan.move) || up[0].id) : "";
     caseDoc = (c.booking && c.booking.doctor) || (c.summary && c.summary.doctor) || (S.doctors[0] || {}).id || "";
+    caseDurSug = sugLen(c, caseMove); caseDur = caseDurSug.min;
     caseSug = c.status === "waiting" ? suggest(c, caseMove) : null;
     if (caseSug) useTime(caseSug.doctor, caseSug.at);
     if (extOn()) needDiary(Date.now(), Date.now() + ((S.cfg.daysAhead || 10) + 7) * DAY);
@@ -3007,14 +3068,14 @@ function clientApp() {
     const candidates = planCandidates(c, caseMove);
     if (!candidates.length) return;
     planBusy[c.id] = true; renderCase();
-    send("plan-ai", { id: c.id, move: caseMove, candidates }, () => { delete planBusy[c.id]; renderCase(); });
+    send("plan-ai", { id: c.id, move: caseMove, dur: caseDur, candidates }, () => { delete planBusy[c.id]; renderCase(); });
   }
   function bookingHTML(c) {
     if (c.status === "booked" && c.booking) {
       const d = docOf(c.booking.doctor) || {}, pt = byPatient(c.patientId) || {};
       const appt = (pt.appts || []).find(a => a.callId === c.id && a.status === "booked");
       if (c.booking.movedTo) return `<div class="booked closed"><b>Moved to ${esc(dayLabel(c.booking.movedTo))}, ${hhmm(c.booking.movedTo)}</b><span class="muted">Was ${esc(dayLabel(c.booking.at))}, ${hhmm(c.booking.at)} with ${esc(d.short || "")}. A later call moved it.</span></div>`;
-      return `<div class="booked"><b>✓ ${c.booking.movedFrom ? "Moved to" : "Booked:"} ${esc(dayLabel(c.booking.at))}, ${hhmm(c.booking.at)}</b><span>${esc(d.name || "")} · ${esc(d.role || "")}</span><small class="muted">${c.booking.movedFrom ? `was ${esc(dayLabel(c.booking.movedFrom))}, ${hhmm(c.booking.movedFrom)} · ` : ""}by ${esc(c.booking.by || "")}</small>
+      return `<div class="booked"><b>✓ ${c.booking.movedFrom ? "Moved to" : "Booked:"} ${esc(dayLabel(c.booking.at))}, ${hhmm(c.booking.at)}${c.booking.dur ? "–" + hhmm(c.booking.at + c.booking.dur * 60e3) : ""}</b><span>${esc(d.name || "")} · ${esc(d.role || "")}</span><small class="muted">${c.booking.movedFrom ? `was ${esc(dayLabel(c.booking.movedFrom))}, ${hhmm(c.booking.movedFrom)} · ` : ""}by ${esc(c.booking.by || "")}</small>
         <div class="aic-btns"><button class="sm" data-act="copyconf" data-id="${esc(c.id)}">Copy confirmation text</button>${appt ? `<button class="sm danger" data-act="apptcancel" data-p="${esc(pt.id)}" data-v="${esc(appt.id)}">Cancel the visit</button>` : ""}</div></div>`;
     }
     if (c.status === "noted") {
@@ -3042,7 +3103,7 @@ function clientApp() {
       : sod(caseDay) === sod(Date.now()) ? "No times left today." : "No times on this day.";
     const docs = S.doctors.slice().sort((a, b) => (b.id === s.doctor) - (a.id === s.doctor) || (b.spec.includes(s.specialty)) - (a.spec.includes(s.specialty)));
     const ok = (d, at) => { const dd = docOf(d); return dd && slotsFor(dd, sod(at), ruleFor(c, caseMove, d)).some(x => x.at === at && usable(x)); };
-    const tLabel = (d, at) => `${esc(dayLabel(at))}, ${hhmm(at)} with ${esc((docOf(d) || {}).short || "")}`;
+    const tLabel = (d, at) => `${esc(dayLabel(at))}, ${hhmm(at)}–${hhmm(at + caseDur * 60e3)} with ${esc((docOf(d) || {}).short || "")}`;
     const pl = c.plan && (c.plan.move || "") === caseMove ? c.plan : null;
     const reasons = [...new Set(sl.filter(x => x.free && x.why).map(x => x.why))];
     return `<div class="bk">
@@ -3057,6 +3118,9 @@ function clientApp() {
         : S.settings.ai && S.settings.hasKey ? `<button class="link small" data-act="planai" data-id="${esc(c.id)}" ${planBusy[c.id] ? "disabled" : ""}>${planBusy[c.id] ? "✦ Planning…" : "✦ Ask AI to plan this " + esc(word("visit"))}</button>` : ""}
       ${s.hint && (!s.doctor || S.doctors.some(d => d.id === s.doctor && (!extOn() || extFor(d)))) ? `<p class="bk-hint">${s.kind === "ai" ? "✦ " : ""}${esc(s.hint)}</p>` : ""}
       ${extNote}
+      <span class="lbl-s">How long</span>
+      <div class="lens" role="radiogroup" aria-label="How long">${(S.lengths || []).map(m => `<button class="chip len ${m === caseDur ? "on" : ""} ${caseDurSug && m === caseDurSug.min ? "sug" : ""}" data-act="bklen" data-v="${m}" role="radio" aria-checked="${m === caseDur}">${fmtLen(m)}</button>`).join("")}</div>
+      ${caseDurSug ? `<p class="note">${caseDur === caseDurSug.min ? "Suggested" : `Suggested ${fmtLen(caseDurSug.min)}`}: ${esc(caseDurSug.why)}</p>` : ""}
       <label class="lbl-s" for="bkdoc">${esc(word("Staff"))}</label>
       <select id="bkdoc" class="voicesel bkdoc">${docs.map(d => `<option value="${esc(d.id)}" ${d.id === doc.id ? "selected" : ""}>${esc(d.name)} · ${esc(d.role)}${d.id === s.doctor ? " (suggested)" : ""}${extOn() && !extFor(d) ? ` (not in ${esc(S.planner.label)})` : ""}</option>`).join("")}</select>
       <div class="days-row"><div class="days" role="tablist" aria-label="Day">${days.map(d => { const x = slotsFor(doc, d, rule), n = x.filter(usable).length, blocked = !n && x.some(y => y.free && y.why); return `<button class="day ${d === caseDay ? "on" : ""}" data-act="bkday" data-v="${d}" ${n ? "" : "disabled"}><small>${esc(new Date(d).toLocaleDateString(undefined, { weekday: "short" }))}</small><b>${new Date(d).getDate()}</b><i>${n ? n + " free" : blocked ? "not allowed" : !loaded(d) ? "…" : "full"}</i></button>`; }).join("")}</div>
@@ -3064,7 +3128,7 @@ function clientApp() {
       <div class="slots">${sl.length ? sl.map(x => `<button class="slot ${x.at === caseSlot ? "on" : ""} ${usable(x) && prefOk(pf, x.at) ? "pref" : ""} ${x.free && x.why ? "rule" : ""}" data-act="bkslot" data-v="${x.at}" ${usable(x) ? "" : "disabled"} ${x.why ? `title="${esc(x.why)}"` : ""}>${hhmm(x.at)}</button>`).join("") : `<p class="muted slots-none">${why || "No times on this day."}</p>`}</div>
       ${pf.any ? `<p class="note"><span class="pref-dot"></span> Matches what the caller asked for</p>` : ""}
       ${reasons.length ? `<p class="note rule-n">Not offered: ${reasons.map(esc).join(" · ")}</p>` : ""}
-      <button class="primary block" data-act="book" ${caseSlot && !caseBusy ? "" : "disabled"}>${caseBusy ? "Booking…" : caseSlot ? `${mv ? "Move to" : "Book"} ${esc(dayLabel(caseSlot))}, ${hhmm(caseSlot)} with ${esc(doc.short)}` : "Pick a time"}</button>
+      <button class="primary block" data-act="book" ${caseSlot && !caseBusy ? "" : "disabled"}>${caseBusy ? "Booking…" : caseSlot ? `${mv ? "Move to" : "Book"} ${esc(dayLabel(caseSlot))}, ${hhmm(caseSlot)}–${hhmm(caseSlot + caseDur * 60e3)} with ${esc(doc.short)}` : "Pick a time"}</button>
       <button class="ghost block danger ${caseArmed === "close" ? "armed" : ""}" data-act="caseclose" data-id="${esc(c.id)}">${caseArmed === "close" ? "Confirm: close without booking" : "Close without booking"}</button>
     </div>`;
   }
@@ -3099,6 +3163,7 @@ function clientApp() {
       <button class="sm" data-act="addnote" data-id="${esc(c.id)}">Add note</button>
     </div>`;
     el.scrollTop = keep;
+    const lc = el.querySelector(".chip.len.on"); if (lc && lc.parentElement) lc.parentElement.scrollLeft = Math.max(0, lc.offsetLeft - lc.parentElement.clientWidth / 2 + lc.offsetWidth / 2);   // the chosen length in view
   }
 
   // Patients
@@ -3180,12 +3245,14 @@ function clientApp() {
   let calView = "week", calDay = 0;
   const calCache = new Map();
   function load(doc, day) {
-    if (extOn() ? !extTimes(doc, day).length : !doc.days.includes(new Date(day).getDay())) return null;
+    if (extOn() ? !extTimes(doc, day, slotMs()).length : !doc.days.includes(new Date(day).getDay())) return null;
     const key = doc.id + day;
     if (calCache.has(key)) return calCache.get(key);
     const ours = new Map();
-    S.patients.forEach(p => (p.appts || []).forEach(a => { if (a.doctor === doc.id && (a.status === "booked" || a.status === "done") && a.at >= day && a.at < day + DAY) ours.set(a.at, { p, a }); }));
-    const cells = slotTimes(doc, day).map(t => ours.has(t) ? { t, k: "ours", x: ours.get(t) } : extFor(doc) && extTaken(doc, t) ? { t, k: "taken" } : { t, k: "free" });
+    const spans = [];
+    S.patients.forEach(p => (p.appts || []).forEach(a => { if (a.doctor === doc.id && (a.status === "booked" || a.status === "done") && a.at >= day && a.at < day + DAY) { ours.set(a.at, { p, a }); spans.push({ start: a.at, end: a.at + (a.dur ? a.dur * 60e3 : slotMs()) }); } }));
+    const step = slotMs();
+    const cells = slotTimes(doc, day, step).map(t => ours.has(t) ? { t, k: "ours", x: ours.get(t) } : spans.some(x => t >= x.start && t < x.end) ? { t, k: "ours" } : extFor(doc) && extTaken(doc, t, step) ? { t, k: "taken" } : { t, k: "free" });
     const used = cells.filter(c => c.k !== "free").length, r = { cells, used, total: cells.length, ours: cells.filter(c => c.k === "ours").length, pct: cells.length ? Math.round(used * 100 / cells.length) : 0 };
     calCache.set(key, r); return r;
   }
@@ -3331,7 +3398,7 @@ function clientApp() {
     return `<div class="ainfo">
       <p class="muted">${esc(src)}, ${esc(whenFull(I.callAt || a.made))} · booked by ${esc(I.by || a.by || "")} ${esc(dayLabel(I.at || a.made))}${P ? ` · sent to ${esc(P.label)} with ${a.ext.note === "full" ? "the whole story" : a.ext.note === "shorter" ? "a shorter note" : "a short note"}` : ""}</p>
       ${I.summary ? `<p class="ai-s">${I.noteBy && I.noteBy !== "desk" && I.noteBy !== "template" ? "✦ " : ""}${esc(I.summary)}</p>` : ""}
-      <div class="chips">${I.triage ? triagePill(I.triage) : ""}${I.priority ? `<span class="pill">Priority ${esc(I.priority)}/5</span>` : ""}${I.service ? `<span class="pill">${esc(I.service)}</span>` : ""}${(I.flags || []).map(f => `<span class="pill flag">⚠ ${esc(f)}</span>`).join("")}</div>
+      <div class="chips">${I.len ? `<span class="pill">⏱ ${esc(fmtLen(I.len))}</span>` : ""}${I.triage ? triagePill(I.triage) : ""}${I.priority ? `<span class="pill">Priority ${esc(I.priority)}/5</span>` : ""}${I.service ? `<span class="pill">${esc(I.service)}</span>` : ""}${(I.flags || []).map(f => `<span class="pill flag">⚠ ${esc(f)}</span>`).join("")}</div>
       ${rows.length ? `<dl class="facts">${rows.map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join("")}${I.mood ? `<div><dt>Mood</dt><dd>${S.moods[I.mood.label] || ""} ${esc(I.mood.label)}</dd></div>` : ""}</dl>` : ""}
       ${(I.deskNotes || []).length ? `<ul class="notes">${I.deskNotes.map(n => `<li><p>${esc(n.text)}</p><small class="muted">${esc(n.by || "")}</small></li>`).join("")}</ul>` : ""}
       ${(I.transcript || []).length ? `<button class="link small" data-act="appttx" data-v="${esc(a.id)}">${apptTx === a.id ? "Hide the conversation" : `Read the conversation (${I.transcript.length})`}</button>${apptTx === a.id ? `<div class="c-log flat">${I.transcript.map(l => `<p class="bub ${l.who}">${esc(l.t)}</p>`).join("")}</div>` : ""}` : ""}
@@ -3367,7 +3434,7 @@ function clientApp() {
       ${patEdit === p.id ? patForm(p) : `<dl class="facts"><div><dt>Phone</dt><dd>${esc(p.phone)}</dd></div>${p.age ? `<div><dt>Age</dt><dd>${esc(p.age)}</dd></div>` : ""}<div><dt>${esc(word("Client"))} since</dt><dd>${esc(new Date(p.since).toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</dd></div></dl>
       <div class="pe-row"><button class="dbb" data-act="patedit" data-id="${esc(p.id)}">${EDIT_SVG}<span>Edit details</span></button><button class="dbb accent" data-act="regopen" data-v="${esc(p.id)}">${PLUS_SVG}<span>New request</span></button></div>`}
       <h3 class="sec2">Coming up</h3>
-      ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || "")}${a.ext ? ` · ${esc(((S.planners || []).find(x => x.id === a.ext.planner) || {}).label || "")}` : ""}</small></div>${a.info ? `<button class="sm" data-act="apptinfo" data-v="${esc(a.id)}" aria-expanded="${apptOpen === a.id}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}<button class="sm danger" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">Cancel</button></div>${apptOpen === a.id ? apptInfoHTML(a) : ""}`).join("") : `<p class="muted">Nothing booked.</p>`}
+      ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}${a.dur ? "–" + hhmm(a.at + a.dur * 60e3) : ""}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || "")}${a.ext ? ` · ${esc(((S.planners || []).find(x => x.id === a.ext.planner) || {}).label || "")}` : ""}</small></div>${a.info ? `<button class="sm" data-act="apptinfo" data-v="${esc(a.id)}" aria-expanded="${apptOpen === a.id}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}<button class="sm danger" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">Cancel</button></div>${apptOpen === a.id ? apptInfoHTML(a) : ""}`).join("") : `<p class="muted">Nothing booked.</p>`}
       <h3 class="sec2">Message for ${esc(p.name.split(" ")[0])}</h3>
       ${p.message ? `<div class="appt msg"><div class="grow"><b>“${esc(p.message.text)}”</b><small>${esc(S.assistant)} passes it on at the next call · ${esc(p.message.by)}, ${esc(dayLabel(p.message.at))}</small></div><button class="sm" data-act="patmsgclear" data-id="${esc(p.id)}">Remove</button></div>`
         : `<p class="muted">${esc(S.assistant)} passes a message on when ${esc(p.name.split(" ")[0])} next phones.</p><textarea id="patmsg" class="cfgin wide" rows="2" placeholder="For example: please bring your X-rays on Friday"></textarea><button class="sm" data-act="patmsg" data-id="${esc(p.id)}">Save message</button>`}
@@ -3462,6 +3529,13 @@ function clientApp() {
       case "caseclosesheet": caseId = ""; renderCase(); break;
       case "txtoggle": showTx = !showTx; renderCase(); break;
       case "bkday": caseDay = +v; caseSlot = 0; renderCase(); break;
+      case "bklen": {   // another length: keep the time if it still fits, otherwise the suggestion for this length
+        caseDur = +v;
+        const cc = byCall(caseId), doc = docOf(caseDoc);
+        const still = caseSlot && doc && slotsFor(doc, sod(caseSlot), cc && ruleFor(cc, caseMove, doc.id)).some(x => x.at === caseSlot && usable(x));
+        if (!still && cc) { caseSug = suggest(cc, caseMove); if (caseSug) useTime(caseSug.doctor, caseSug.at); else caseSlot = 0; }
+        renderCase(); break;
+      }
       case "calview": calView = v; render(); break;
       case "calday": calDay = +v; calView = "day"; render(); scrollTo(0, 0); break;
       case "caltoday": calDay = sod(Date.now()); render(); break;
@@ -3479,7 +3553,7 @@ function clientApp() {
         if (!caseSlot || caseBusy) break;
         caseBusy = true; renderCase();
         const at = caseSlot, doc = docOf(caseDoc);
-        send("book", { id: caseId, doctor: caseDoc, at, move: caseMove }, (ok, msg) => {
+        send("book", { id: caseId, doctor: caseDoc, at, move: caseMove, dur: caseDur, durWhy: caseDur === (caseDurSug || {}).min ? (caseDurSug.why || "").replace(/^✦ /, "") : "chosen at the front desk" }, (ok, msg) => {
           caseBusy = false;
           if (ok) { caseSlot = 0; toast(`Booked ${dayLabel(at)}, ${hhmm(at)} with ${doc ? doc.short : "the " + word("staff")}`); }
           else { toast(msg || "Not booked"); caseSlot = 0; }
@@ -3642,10 +3716,11 @@ function clientApp() {
     if (c.contains("ttsvoicesel")) { S.settings.ttsVoice = e.target.value; send("set", { k: "ttsVoice", v: e.target.value }); return; }
     if (c.contains("ttsmodelsel")) { S.settings.ttsModel = e.target.value; send("set", { k: "ttsModel", v: e.target.value }); renderCfg(); return; }
     if (c.contains("ttsinstr")) { S.settings.ttsInstructions = e.target.value.trim(); send("set", { k: "ttsInstructions", v: S.settings.ttsInstructions }); return; }
-    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && !c.contains("bizsel") && !c.contains("rgsel") && !c.contains("plancfg") && !c.contains("planlink") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
+    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && !c.contains("bizsel") && !c.contains("rgsel") && !c.contains("svclen") && !c.contains("plancfg") && !c.contains("planlink") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
     if (e.target.id === "rg-book") { readReg(); renderReg(); return; }   // the request part shows or hides
     if (c.contains("rgsel")) { readReg(); return; }
     if (c.contains("bizsel")) { dent = null; send("business", { v: e.target.value }); return; }
+    if (c.contains("svclen")) { send("svc-len", { k: e.target.dataset.k, v: e.target.value }); return; }
     if (c.contains("plancfg")) { send("planner-cfg", { id: planId, k: e.target.dataset.k, v: e.target.value }); return; }
     if (c.contains("planlink")) { send("planner-link", { id: planId, staff: e.target.dataset.staff, ext: e.target.value }); return; }
     if (c.contains("wordin")) { send("words", { k: e.target.dataset.k, v: e.target.value }); return; }
@@ -3662,7 +3737,7 @@ function clientApp() {
       const on = $("#casesheet .day.on"); if (on && on.scrollIntoView) on.scrollIntoView({ inline: "center", block: "nearest" });   // the picked day in view
       return;
     }
-    if (c.contains("bkmove")) { caseMove = e.target.value; const cc = byCall(caseId); caseSug = cc ? suggest(cc, caseMove) : null; if (caseSug) useTime(caseSug.doctor, caseSug.at); else { caseDay = 0; caseSlot = 0; } renderCase(); return; }
+    if (c.contains("bkmove")) { caseMove = e.target.value; const cc = byCall(caseId); if (cc) { caseDurSug = sugLen(cc, caseMove); caseDur = caseDurSug.min; } caseSug = cc ? suggest(cc, caseMove) : null; if (caseSug) useTime(caseSug.doctor, caseSug.at); else { caseDay = 0; caseSlot = 0; } renderCase(); return; }
     if (c.contains("modelsel")) send("aimodel", { p: e.target.dataset.p, v: e.target.value });
     if (c.contains("linein")) { send("set", { k: "bridgeUrl", v: e.target.value }); return; }
     if (c.contains("cfgin") && e.target.dataset.k) {
@@ -3902,6 +3977,9 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 #plansheet{z-index:13}
 #impsheet{z-index:14}
 #regsheet{z-index:12}
+.lens{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:6px -14px 4px;padding:2px 14px 4px}
+.chip.len{flex:none;font-variant-numeric:tabular-nums}
+.chip.len.sug:not(.on){border-color:var(--signal);color:var(--signal)}
 .dlg{position:fixed;inset:0;z-index:40;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.45);padding:16px 12px calc(16px + env(safe-area-inset-bottom,0px))}
 .dlg.open{display:flex}
 .dlg-card{width:100%;max-width:460px;background:var(--paper);border:1px solid var(--rule);border-radius:22px;padding:18px 18px 14px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
@@ -4354,6 +4432,7 @@ window.__boot = function (st) {
     requestAnimationFrame(function () { d.style.transform = ""; });
   });
   ${visitConflict.toString()}
+  ${askedLength.toString()}
   (${clientApp.toString()})();
 };</script>
 </body></html>`;

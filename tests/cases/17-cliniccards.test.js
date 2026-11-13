@@ -71,6 +71,7 @@ scenario('cliniccards', async (t) => {
   await app.until(() => app.$('[data-act="opencase"][data-id="c-1"]'), 2000, 'the queue');
   app.tap('[data-act="opencase"][data-id="c-1"]');
   await app.until(() => app.$$('#casesheet .slot').length, 4000, 'times from ClinicCards');
+  app.tap('[data-act="bklen"][data-v="30"]');   // a root canal suggests 60 min; 30 min checks the same grid as before
   app.tap(app.$$('#casesheet .day')[1]);   // tomorrow: today's 10:00–11:30 are already within the hour
   const slots = app.$$('#casesheet .slot').map((b) => b.textContent + (b.disabled ? '×' : ''));
   t.see('times', slots.join(' '));
