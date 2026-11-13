@@ -2,6 +2,24 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.9.0 (2026-11-13): The whole story with every booking
+
+- 🗂️ **Everything goes with the booking**: The ClinicCards visit note now carries the AI summary, every detail, warnings, mood, front-desk notes and the whole conversation.
+- 🔍 **Details on each visit**: On the client's page, Details shows what was known when it was booked, including the conversation.
+- 🛑 **Cancel, with a check first**: Cancelling opens a dialog with the visit and an optional reason; the reason and who cancelled stay in the history.
+
+**Changes**
+
+- Booking note: source and length of the call, reason, triage, priority, service, warnings, AI summary, details, mood, client and earlier visits, front-desk notes, conversation; a shorter note if ClinicCards refuses a long one
+- Each visit keeps that snapshot (Details on the client's page), and shows whether ClinicCards got the whole story, a shorter note or the short line
+- A confirmation dialog for cancelling, in the case and on the client's page, with an optional reason; it says when the planning service needs it cancelled there too
+- Planning engines may offer cancel(); Frontly then cancels there first and changes nothing if that fails
+- Tests: 23-booking-details (29 of 29 with the testkit)
+
+**Fixes**
+
+- ClinicCards visit notes were cut to 400 characters
+
 ## 1.8.3 (2026-11-13): ClinicCards times, found
 
 - 🔎 **Check the diary**: The ClinicCards window shows what a week's schedule contains: whose shifts, how many, and whether each person is linked in Frontly.
