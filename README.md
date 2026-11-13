@@ -160,6 +160,10 @@ Rename any word underneath (an "employee" can be a "consultant", a "customer" a 
 
 **Settings › Dentists › Add** (the section takes your word for staff: Mechanics, Employees…): the name, a short name for cards and the calendar, the role, the services they do, the days they work and their hours. Bookings, the AI's suggestions and the calendar use them. **Edit** changes one; **Remove** takes one off (not while they have visits booked; past visits keep their name).
 
+### Book into ClinicCards
+
+**Settings › Planning** chooses where bookings live: Frontly's own diary, or ClinicCards. Each planning service has its own settings window: the API key (kept in the Keychain), a connection test, the cabinet and the note for each visit, and which ClinicCards person each staff member is (or **Import** to link and add them). With ClinicCards in use, the free times come from its shifts minus its visits, and each booking is made there first, as a visit to confirm. Cancelling or moving a visit has to be done in ClinicCards as well: Frontly says so when you do it. Details, and how to add another planning service: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
+
 ### Correct a client's details
 
 On a client's page, **Edit details** changes the name, the phone number and the age (where the business asks for it). The number has to be the one they call from: Reva recognises callers by it, so two records can't share one. The new name shows everywhere and reaches the phone line at once. **Remove** takes the record away (not while a booking is ahead); their calls stay.

@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.5.2';
+const VERSION = '1.6.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -32,7 +32,8 @@ const KC_UPDATE_SNOOZE = 'frontly-update-snooze';   // Keychain key, unique per 
 const NATIVE_SHELL = (() => { try { return config.runsInNativeShell === true; } catch (e) { return false; } })();
 
 // Other secrets (settings blueprint, Step 7): each its own Keychain entry, typed into a native secure prompt, never in settings.json or the page.
-const SECRETS = { bridge: { key: "FRONTLY_BRIDGE_TOKEN", name: "Phone line token", hint: "The APP_TOKEN secret of your Frontly bridge on Cloudflare." } };
+const SECRETS = { bridge: { key: "FRONTLY_BRIDGE_TOKEN", name: "Phone line token", hint: "The APP_TOKEN secret of your Frontly bridge on Cloudflare." },
+  cliniccards: { key: "FRONTLY_CLINICCARDS_KEY", name: "ClinicCards API key", hint: "In ClinicCards: Settings › Other › Clinic settings › API settings › Generate and show." } };
 const secretFor = id => Keychain.contains(SECRETS[id].key) ? Keychain.get(SECRETS[id].key) : null;
 async function askSecret(id) {
   const d = SECRETS[id], cur = secretFor(id);
@@ -1118,7 +1119,7 @@ ${BIZ.care} an exact time for a new ${W.visit}: the front desk will call back to
 ${BIZ.safety ? BIZ.safety + ", then end the call.\n" : ""}When you're done, or the caller wants to stop, say a short goodbye (mention the call back only if the front desk needs to call) and end the call.`; };
 
 // ---------- front desk ----------
-function bookCall(m) {
+async function bookCall(m) {
   const c = calls.find(x => x.id === m.id), doc = docById(m.doctor), at = Number(m.at);
   if (!c || !doc || doc.archived || !isFinite(at)) return "That booking couldn't be made";
   if (!settings.deskUser) return "Sign in to the front desk first";
@@ -1129,10 +1130,14 @@ function bookCall(m) {
   const spec = (move && (move.spec || ruleOpts().specOf(move))) || (c.summary && c.summary.specialty) || doc.spec[0];
   const why = pt ? visitConflict(pt.appts, at, spec, ruleOpts(move && move.id)) : "";
   if (why) return why;
-  if (!pt) { pt = { id: "p-" + Date.now().toString(36), name: c.fields.name || "Caller " + c.phone, age: c.fields.age || null, phone: c.phone, since: Date.now(), notes: [], appts: [] }; patients.push(pt); c.patientId = pt.id; }
   const reason = (move && move.reason) || (c.summary && c.summary.reason) || c.fields.complaint || "Visit";
+  let ext = null;
+  if (plannerId() !== "builtin") { try { ext = await bookAtEngine(c, pt, doc, at, reason); } catch (e) { return String(e.message || e); } }
+  if (!pt) { pt = { id: "p-" + Date.now().toString(36), name: c.fields.name || "Caller " + c.phone, age: c.fields.age || null, phone: c.phone, since: Date.now(), notes: [], appts: [] }; patients.push(pt); c.patientId = pt.id; }
+  if (ext && ext.client) pt.ext = Object.assign({}, pt.ext, { [ext.planner]: ext.client });
   pt.appts = pt.appts || [];
   const a = { id: "a-" + Date.now().toString(36), at, doctor: doc.id, spec, reason, callId: c.id, status: "booked", by: settings.deskUser, made: Date.now() };
+  if (ext) a.ext = { planner: ext.planner, ref: ext.ref };   // booked there too
   pt.appts.push(a);
   if (move) {   // a change of booking moves the visit; the call that booked it shows where it went
     move.status = "moved"; move.movedTo = a.id; a.movedFrom = move.id;
@@ -1187,10 +1192,140 @@ async function aiPlan(m) {
     provider: settings.aiProvider, made: Date.now(), move: m.move || "" };
 }
 
+// ---------- planning engines ----------
+// Where bookings live. "builtin" is Frontly's own diary (Settings › Booking). Every other engine is a plug-in: one
+// entry here, with what its own settings window shows (fields, a secret from SECRETS, a help line and a docs link),
+// what it can't do (can), and four calls Frontly makes:
+//   test()            checks the connection; { lines: [what it found], lists: { name: [[value, label]] } } for selects
+//   staff()           the people who take bookings there: [{ id, name, role }]
+//   diary(from, to)   their working hours and taken time, local times in ms:
+//                     { shifts: [{ staff, start, end, room }], busy: [{ staff, start, end }], step: minutes|0 }
+//   book(x)           books { staff, start, end, room, client: { name, phone, ref }, note } there: { ref, client }
+// Frontly's staff are linked to the engine's people (doctor.ext[engine] = their id); times come from the engine's
+// diary, and Frontly keeps its own copy of every booking for the front desk, the calendar and the phone line.
+// To add an engine: an entry here, its secret in SECRETS, and a test in tests/cases with its API faked.
+const sod = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const ymd = t => { const d = new Date(t), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+const hm = t => { const d = new Date(t); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
+const localTime = v => { const m = String(v || "").match(/^(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d)(?::(\d\d))?/); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)).getTime() : NaN; };
+const PLANNERS = {
+  builtin: { label: "Frontly", about: "Frontly's own diary: the working days and hours you give each person in Settings, and the times booked here.", builtin: true, can: { cancel: true, move: true } },
+  cliniccards: {
+    label: "ClinicCards", about: "Bookings go straight into your ClinicCards schedule, as visits to confirm. Free times come from the shifts and visits there.",
+    docs: "https://cliniccards.com/api", secret: "cliniccards",
+    help: "Get the API key in ClinicCards: Settings › Other › Clinic settings › API settings › Generate and show.",
+    can: { cancel: false, move: false },   // the API we could confirm has no call for these: done in ClinicCards
+    fields: [
+      { k: "room", label: "Cabinet", type: "select", list: "rooms", help: "Where a visit goes when the shift doesn't name a cabinet" },
+      { k: "note", label: "Note on each visit", type: "text", def: "Booked by Frontly", help: "The call's reason is added after it" },
+    ],
+    async req(method, path, query, body) {
+      const key = secretFor("cliniccards");
+      if (!key) throw new Error("Add the API key first");
+      const qs = query ? "?" + Object.entries(query).map(([k, v]) => k + "=" + encodeURIComponent(v)).join("&") : "";
+      const r = new Request("https://cliniccards.com/api/" + path + qs);
+      r.method = method; r.timeoutInterval = 15;
+      r.headers = { "Token": key, "Content-Type": "application/json" };
+      if (body !== undefined) r.body = JSON.stringify(body);
+      let j = null;
+      try { j = await r.loadJSON(); } catch (e) { throw new Error("ClinicCards didn't answer: " + String(e.message || e).slice(0, 80)); }
+      const code = (r.response && r.response.statusCode) || 0;
+      if (code === 401 || code === 403) throw new Error("ClinicCards refused the API key");
+      if (!j || typeof j !== "object" || j.result === "fail" || code >= 400) throw new Error("ClinicCards: " + String((j && j.error) || "HTTP " + code).slice(0, 120));
+      return "data" in j ? j.data : j;
+    },
+    async staff() {
+      const rows = await this.req("GET", "staff");
+      return (Array.isArray(rows) ? rows : []).filter(x => x && x.doctor_id && ["", "DOCTOR", "SPECIALIST"].includes(String(x.role || "").toUpperCase()))
+        .map(x => ({ id: String(x.doctor_id), name: [x.firstname, x.lastname].filter(Boolean).join(" ").trim() || "No. " + x.doctor_id, role: cap(String(x.role || "").toLowerCase()) }));
+    },
+    async test() {
+      const staff = await this.staff();
+      const rooms = await this.req("GET", "cabinets").catch(() => []);
+      const st = await this.req("GET", "booking-settings").catch(() => ({}));
+      const rl = (Array.isArray(rooms) ? rooms : []).filter(x => x && x.cabinet_id).map(x => [String(x.cabinet_id), String(x.name || x.cabinet_name || x.title || "Cabinet " + x.cabinet_id)]);
+      return { lines: [`${staff.length} ${staff.length === 1 ? "person takes" : "people take"} bookings`, `${rl.length} cabinet${rl.length === 1 ? "" : "s"}`, st && st.booking_interval ? `Times every ${st.booking_interval} min` : "Times every " + cfg("slotMinutes") + " min"],
+        lists: { rooms: rl, staff: staff.map(x => [x.id, x.name]) } };
+    },
+    async diary(from, to) {
+      const q = { from: ymd(from), to: ymd(to) };
+      const [shifts, visits, spaces, st] = await Promise.all([this.req("GET", "schedule-shifts", q), this.req("GET", "visits", q).catch(() => []),
+        this.req("GET", "schedule-spaces", q).catch(() => []), this.req("GET", "booking-settings").catch(() => ({}))]);
+      const out = { shifts: [], busy: [], step: (st && +st.booking_interval >= 5) ? +st.booking_interval : 0 };
+      (Array.isArray(shifts) ? shifts : []).forEach(x => { const a = localTime(x.shift_start), b = localTime(x.shift_end); if (x && x.doctor_id && a < b) out.shifts.push({ staff: String(x.doctor_id), start: a, end: b, room: String(x.schedule_cabinets_id || "") }); });
+      [].concat(Array.isArray(visits) ? visits : [], Array.isArray(spaces) ? spaces : []).forEach(x => {
+        if (!x) return;
+        const a = localTime(x.visit_start || x.space_start), b = localTime(x.visit_end || x.space_end), who = String(x.doctor_id || x.created_by_id || "");
+        if (a < b) out.busy.push({ staff: who, start: a, end: b });   // no person: blocked for everyone
+      });
+      return out;
+    },
+    async book(x) {
+      let pid = x.client.ref || "";
+      const phone = String(x.client.phone || "").replace(/\D/g, "");
+      if (!pid && phone) { const f = await this.req("GET", "patients", { phone }).catch(() => []); const hit = (Array.isArray(f) ? f : []).find(p => p && p.patient_id); if (hit) pid = String(hit.patient_id); }
+      if (!pid) {
+        const parts = String(x.client.name || "").trim().split(/\s+/), last = parts.length > 1 ? parts.pop() : "-";
+        const made = await this.req("POST", "patients", undefined, { firstname: parts.join(" ").slice(0, 50) || "Caller", lastname: last.slice(0, 50), phone });
+        pid = String((made && made.patient_id) || (Array.isArray(made) && made[0] && made[0].patient_id) || "");
+        if (!pid) throw new Error("ClinicCards didn't create the patient");
+      }
+      const v = await this.req("POST", "visits", undefined, { status: "BOOKING", patient_id: pid, cabinet_id: x.room, doctor_id: x.staff, note: String(x.note || "").slice(0, 400), date: ymd(x.start), time_start: hm(x.start), time_end: hm(x.end) });
+      return { ref: String((v && (v.visit_id || v.id)) || (Array.isArray(v) && v[0] && (v[0].visit_id || v[0].id)) || ""), client: pid };
+    },
+  },
+};
+const plannerId = () => PLANNERS[settings.planner] ? settings.planner : "builtin";
+const planner = () => PLANNERS[plannerId()];
+const plannerCfg = id => Object.assign({}, ...(PLANNERS[id].fields || []).map(f => ({ [f.k]: f.def || "" })), (settings.plannerCfg || {})[id] || {});
+let extDiary = null, extBusy = false;   // the engine's diary for the days in view: { id, from, to, at, shifts, busy, step, err }
+// The engine's diary, by Frontly staff id, for from–to (whole days); kept a minute, then fetched again
+async function loadDiary(from, to, force) {
+  const id = plannerId();
+  if (id === "builtin" || extBusy) return false;
+  from = sod(from); to = sod(to) + DAY - 1;
+  if (!force && extDiary && extDiary.id === id && extDiary.from <= from && extDiary.to >= to && Date.now() - extDiary.at < 60e3) return false;
+  if (extDiary && extDiary.id === id) { from = Math.min(from, extDiary.from); to = Math.max(to, extDiary.to); }
+  to = Math.min(to, from + 120 * DAY);
+  extBusy = true;
+  try {
+    const d = await PLANNERS[id].diary(from, to), byExt = {};
+    ALL_DOCTORS.forEach(doc => { const e = doc.ext && doc.ext[id]; if (e) byExt[e] = doc.id; });
+    const shifts = {}, busy = {};
+    d.shifts.forEach(x => { const k = byExt[x.staff]; if (k) (shifts[k] = shifts[k] || []).push(x); });
+    d.busy.forEach(x => { const ks = x.staff ? [byExt[x.staff]].filter(Boolean) : Object.values(byExt); ks.forEach(k => (busy[k] = busy[k] || []).push({ start: x.start, end: x.end })); });
+    extDiary = { id, from, to, at: Date.now(), shifts, busy, step: d.step || 0, err: "" };
+  } catch (e) {
+    extDiary = { id, from, to, at: Date.now(), shifts: {}, busy: {}, step: 0, err: String(e.message || e).slice(0, 160) };
+  } finally { extBusy = false; }
+  return true;
+}
+const diaryAhead = () => loadDiary(Date.now(), Date.now() + (cfg("daysAhead") + 7) * DAY).then(changed => { if (changed) push(); }).catch(() => {});
+// Books at the engine first; Frontly keeps its copy only when that worked
+async function bookAtEngine(c, pt, doc, at, why) {
+  const id = plannerId(), P = PLANNERS[id], ext = doc.ext && doc.ext[id];
+  if (!ext) throw new Error(`${doc.short} isn't linked to ${P.label} yet: Settings › Planning › ${P.label}`);
+  const len = cfg("slotMinutes") * 60e3;   // each booking lasts the appointment length; the engine's step only spaces the times
+  await loadDiary(at, at, true);   // the time again, live: someone may have taken it in the meantime
+  const sh = ((extDiary.shifts || {})[doc.id] || []).find(x => at >= x.start && at + len <= x.end);
+  if (extDiary.err) throw new Error(extDiary.err);
+  if (!sh) throw new Error(`That time is no longer in ${doc.short}'s shift in ${P.label}`);
+  if (((extDiary.busy || {})[doc.id] || []).some(x => at < x.end && at + len > x.start)) throw new Error(`That time was just taken in ${P.label}. Pick another one`);
+  const cl = { name: (pt && pt.name) || c.fields.name || "Caller", phone: (pt && pt.phone) || c.phone, ref: pt && pt.ext && pt.ext[id] };
+  const note = [plannerCfg(id).note, why].filter(Boolean).join(": ");
+  const r = await P.book({ staff: ext, start: at, end: at + len, room: sh.room || plannerCfg(id).room || "", client: cl, note });
+  await loadDiary(at, at, true);
+  return Object.assign({ planner: id }, r);
+}
+
 // ---------- state sent to the UI ----------
 function clientState() {
   return {
     patients, calls: calls.slice(0, 200),
+    planner: { id: plannerId(), label: planner().label, can: planner().can },
+    planners: Object.entries(PLANNERS).map(([id, P]) => ({ id, label: P.label, about: P.about, help: P.help || "", docs: P.docs || "", builtin: !!P.builtin, can: P.can, secret: P.secret || "",
+      fields: (P.fields || []).map(({ k, label, type, list, help, def }) => ({ k, label, type, list, help, def })), cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
+    ext: extDiary && extDiary.id === plannerId() ? extDiary : null,
     doctors: DOCTORS, allDoctors: ALL_DOCTORS, specialties: SPECIALTIES, words: WORDS, business: settings.business || "dental",
     templates: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { label: t.label, words: t.words, staffName: t.staffName, staffShort: t.staffShort, staffRole: t.staffRole }])),
     ask: BIZ.ask, fieldLabels: Object.assign({}, FIELD_LABELS, BIZ.labels), customised: !!(settings.services || settings.words), staff: DESK_STAFF, demoPin: DEMO_PIN, moods: MOODS,
@@ -1291,9 +1426,12 @@ async function handle(m) {
       saveAll(); push(); return call("__done", m.req, true, "");
     }
     case "book": {
-      const err = bookCall(m);
-      if (err) return call("__done", m.req, false, err);
-      saveAll(); saveWidget(widgetSnapshot()); push(); return call("__done", m.req, true, "");
+      const err = await bookCall(m);
+      if (err) { push(); return call("__done", m.req, false, err); }
+      const moved = m.move && plannerId() !== "builtin" && !planner().can.move;
+      saveAll(); saveWidget(widgetSnapshot()); push();
+      if (moved) toast(`Booked in ${planner().label}. Cancel the old visit there too: Frontly can't do that through its API yet`);
+      return call("__done", m.req, true, "");
     }
     case "desk-close": { const c = calls.find(x => x.id === m.id); if (c) { c.status = "closed"; c.closedBy = settings.deskUser; } saveWidget(widgetSnapshot()); break; }
     case "desk-reopen": { const c = calls.find(x => x.id === m.id); if (c && (c.status === "closed" || c.status === "noted")) { c.status = "waiting"; delete c.followUp; } saveWidget(widgetSnapshot()); break; }
@@ -1320,7 +1458,64 @@ async function handle(m) {
       if (lineOn()) lineReq("PUT", "/patients", patientsBrief()).catch(e => startLog("phone line: " + String(e.message || e).slice(0, 100)));
       return;
     }
-    case "appt-cancel": cancelAppt(m); saveWidget(widgetSnapshot()); saveAll(); toast("Appointment cancelled"); return push();
+    case "appt-cancel": {
+      const pt = patients.find(p => p.id === m.patient), a = pt && (pt.appts || []).find(x => x.id === m.appt), there = a && a.ext && PLANNERS[a.ext.planner];
+      cancelAppt(m); saveWidget(widgetSnapshot()); saveAll();
+      toast(there && !there.can.cancel ? `Cancelled in Frontly. Cancel it in ${there.label} too: Frontly can't do that through its API yet` : "Appointment cancelled");
+      return push();
+    }
+    // Settings › Planning: which engine, and each engine's own window
+    case "planner-use": {
+      if (!PLANNERS[m.id]) return;
+      settings.planner = m.id; extDiary = null; saveAll();
+      toast(m.id === "builtin" ? "Bookings in Frontly's own diary" : `Bookings go to ${PLANNERS[m.id].label}`);
+      push(); if (m.id !== "builtin") { await loadDiary(Date.now(), Date.now() + (cfg("daysAhead") + 7) * DAY, true); push(); }
+      return;
+    }
+    case "planner-cfg": {
+      const P = PLANNERS[m.id], f = P && (P.fields || []).find(x => x.k === m.k);
+      if (!f) return;
+      settings.plannerCfg = settings.plannerCfg || {};
+      settings.plannerCfg[m.id] = Object.assign({}, settings.plannerCfg[m.id], { [m.k]: String(m.v == null ? "" : m.v).slice(0, 200) });
+      saveAll(); return push();
+    }
+    case "planner-test": {
+      const P = PLANNERS[m.id];
+      if (!P || P.builtin) return;
+      settings.plannerState = settings.plannerState || {};
+      try {
+        const r = await P.test();
+        settings.plannerState[m.id] = { ok: true, at: Date.now(), lines: r.lines || [], lists: r.lists || {} };
+        toast(`${P.label}: connected`);
+      } catch (e) { settings.plannerState[m.id] = Object.assign({}, settings.plannerState[m.id], { ok: false, at: Date.now(), msg: String(e.message || e).slice(0, 160) }); }
+      saveAll(); return push();
+    }
+    case "planner-link": {   // a Frontly staff member ↔ a person in the engine
+      const d = (settings.doctors || []).find(x => x.id === m.staff);
+      if (!d || !PLANNERS[m.id]) return;
+      d.ext = Object.assign({}, d.ext); if (m.ext) d.ext[m.id] = String(m.ext); else delete d.ext[m.id];
+      setDoctors(); extDiary = null; saveAll(); return push();
+    }
+    case "planner-import": {   // everyone in the engine not yet linked becomes a staff member, linked
+      const P = PLANNERS[m.id];
+      if (!P || P.builtin) return;
+      let people;
+      try { people = await P.staff(); } catch (e) { toast(String(e.message || e)); return; }
+      settings.doctors = settings.doctors || [];
+      let added = 0, linked = 0;
+      people.forEach(x => {
+        if (settings.doctors.some(d => d.ext && d.ext[m.id] === x.id)) return;
+        const norm = n => String(n || "").toLowerCase().replace(/\b(dr|doc|prof|mr|mrs|ms)\.?\s+/g, "").replace(/\s+/g, " ").trim();   // "Dr. Tomas Petraitis" is "Tomas Petraitis"
+        const same = settings.doctors.find(d => !d.archived && !(d.ext && d.ext[m.id]) && norm(d.name) === norm(x.name));
+        if (same) { same.ext = Object.assign({}, same.ext, { [m.id]: x.id }); linked++; return; }
+        settings.doctors.push({ id: "d-" + Date.now().toString(36) + added, name: x.name, short: x.name, role: x.role || cap(WORDS.staff), spec: [Object.keys(SPECIALTIES).includes("general") ? "general" : Object.keys(SPECIALTIES)[0]], days: [1, 2, 3, 4, 5], from: 8, to: 18, ext: { [m.id]: x.id } });
+        added++;
+      });
+      setDoctors(); extDiary = null; saveAll();
+      toast(added || linked ? `${added} added, ${linked} linked by name. Set what each one does in Settings › ${cap(WORDS.staffs)}` : "Everyone is linked already");
+      return push();
+    }
+    case "planner-diary": if (await loadDiary(m.from, m.to, !!m.force)) push(); return;   // only a fetched diary redraws
     case "copy": if (m.text) { Pasteboard.copy(String(m.text)); toast("Copied"); } return;
     case "line-sync": return syncLine(true);
     case "line-call": if (settings.linePhone) Safari.open("tel:" + digits(settings.linePhone).replace(/^/, "+")); return;
@@ -1600,6 +1795,7 @@ function clientApp() {
       <div class="srow"><div class="grow"><b>${st.deskUser ? "Signed in as " + esc(st.deskUser) : "Not signed in"}</b><small class="muted wrap">The receptionist's view of the calls Reva took</small></div>${st.deskUser ? `<button class="sm" data-act="signout">Sign out</button>` : `<button class="sm" data-act="gotab" data-v="desk">Sign in</button>`}</div>
       <h3 class="sec" id="business">Business</h3>${businessHTML()}
       <h3 class="sec" id="dentists">${word("Staffs")}</h3>${dentistsHTML()}
+      <h3 class="sec" id="planning">Planning</h3>${planningHTML()}
       <h3 class="sec">Phone line</h3>${lineHTML()}
       <h3 class="sec">Data</h3>
       <div class="srow"><div class="grow"><b>Remove all calls and ${word("clients")}</b><small class="muted wrap">Starts the front desk empty. ${word("Staffs")} and settings stay.</small></div><button class="sm danger ${demoArmed ? "armed" : ""}" data-act="demoreset">${demoArmed ? "Confirm" : "Remove all"}</button></div>
@@ -1619,6 +1815,41 @@ function clientApp() {
     el.scrollTop = keepTop;
   }
   let secArmed = null;
+  // Settings › Planning: where bookings live. Each outside engine has its own settings window (#plansheet).
+  function planningHTML() {
+    return `<small class="muted pad-s">Where bookings live. Frontly's own diary, or a planning service it books into.</small>
+      ${(S.planners || []).map(P => { const on = S.planner.id === P.id, ok = P.builtin || (P.state && P.state.ok);
+        return `<div class="srow plan-r ${on ? "on" : ""}"><div class="grow"><b>${esc(P.label)}${on ? ` <span class="pill line">In use</span>` : ""}</b><small class="muted wrap">${esc(P.about)}${P.builtin ? "" : P.state ? (P.state.ok ? " · Connected" : " · Last test failed") : " · Not set up"}</small></div>
+          ${P.builtin ? (on ? "" : `<button class="sm" data-act="planuse" data-v="builtin">Use</button>`) : `<button class="dbb" data-act="planopen" data-v="${esc(P.id)}">Settings ›</button>`}</div>`; }).join("")}`;
+  }
+  let planId = "";
+  function renderPlan() {
+    const el = $("#plansheet"), P = (S.planners || []).find(x => x.id === planId);
+    el.classList.toggle("open", !!P); lockBody();
+    if (!P) return;
+    const keep = el.scrollTop, st = P.state || {}, key = ((S.secrets || {})[P.secret] || {}).last4, on = S.planner.id === P.id;
+    const list = n => (st.lists || {})[n] || [];
+    const people = list("staff"), staff = (S.allDoctors || S.doctors).filter(d => !d.archived);
+    el.innerHTML = `<div class="sh-head"><h2>${esc(P.label)}</h2><button class="link" data-act="planclose">Done</button></div><div class="sh-body">
+      <p class="muted">${esc(P.about)}</p>
+      <h3 class="sec2">Connection</h3>
+      <div class="srow"><div class="grow"><b>API key</b><small class="muted wrap">${key ? `Saved in the Keychain, ends in …${esc(key)}` : esc(P.help)}</small></div><button class="sm" data-act="secret-set" data-v="${esc(P.secret)}">${key ? "Replace" : "Add"}</button>${key ? `<button class="sm danger" data-act="secret-remove" data-v="${esc(P.secret)}">Remove</button>` : ""}</div>
+      <div class="srow"><div class="grow"><b>${st.ok ? "✓ Connected" : st.msg ? "Couldn't connect" : "Not tested yet"}</b><small class="muted wrap">${st.ok ? esc(st.lines.join(" · ")) + " · " + esc(rel(st.at)) : st.msg ? esc(st.msg) : "Test it once the key is in."}</small></div><button class="dbb accent" data-act="plantest" ${key ? "" : "disabled"}>Test</button></div>
+      ${P.docs ? `<p class="note">The API: <a href="${esc(P.docs)}">${esc(P.docs.replace(/^https?:\/\//, ""))}</a></p>` : ""}
+      ${P.fields.length ? `<h3 class="sec2">Bookings</h3>${P.fields.map(f => `<div class="cfg"><div class="cfg-h"><b>${esc(f.label)}</b></div>${f.help ? `<small class="muted">${esc(f.help)}</small>` : ""}
+        ${f.type === "select" ? `<select class="voicesel wide plancfg" data-k="${esc(f.k)}" aria-label="${esc(f.label)}"><option value="">${list(f.list).length ? "Choose" : "Test the connection to load these"}</option>${list(f.list).map(([v, l]) => `<option value="${esc(v)}" ${String(P.cfg[f.k]) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
+          : `<input class="cfgin wide plancfg" data-k="${esc(f.k)}" value="${esc(P.cfg[f.k] || "")}" aria-label="${esc(f.label)}" autocomplete="off">`}</div>`).join("")}` : ""}
+      <h3 class="sec2">${esc(word("Staffs"))}</h3>
+      <small class="muted">Link each ${esc(word("staff"))} to their person in ${esc(P.label)}: Frontly offers their free times from there and books them there.</small>
+      ${staff.map(d => `<div class="lrow"><b>${esc(d.name)}</b><select class="voicesel planlink" data-staff="${esc(d.id)}" aria-label="${esc(d.name)} in ${esc(P.label)}"><option value="">Not linked</option>${people.map(([v, l]) => `<option value="${esc(v)}" ${(d.ext || {})[P.id] === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>`).join("")}
+      <div class="srow"><div class="grow"><b>Bring in everyone from ${esc(P.label)}</b><small class="muted wrap">Adds whoever isn't linked yet as a ${esc(word("staff"))}, or links them by name</small></div><button class="sm" data-act="planimport" ${st.ok ? "" : "disabled"}>Import</button></div>
+      ${!P.can.cancel || !P.can.move ? `<p class="note rule-n">Frontly books new ${esc(word("visits"))} in ${esc(P.label)}. ${[!P.can.cancel && "Cancelling", !P.can.move && "moving"].filter(Boolean).join(" and ")} a ${esc(word("visit"))} has to be done in ${esc(P.label)} as well: its API has no way for Frontly to do it yet.</p>` : ""}
+      <h3 class="sec2">Use it</h3>
+      ${on ? `<div class="srow"><div class="grow"><b>Bookings go to ${esc(P.label)}</b></div><button class="sm" data-act="planuse" data-v="builtin">Back to Frontly's diary</button></div>`
+        : `<button class="primary block" data-act="planuse" data-v="${esc(P.id)}" ${st.ok ? "" : "disabled"}>${st.ok ? `Use ${esc(P.label)} for bookings` : "Test the connection first"}</button>`}
+    </div>`;
+    el.scrollTop = keep;
+  }
   function lineHTML() {
     const L = S.line || {}, tok = ((S.secrets || {}).bridge || {}).last4, last = L.last;
     const status = !L.url ? "Not set up. Calls to a real number need the Frontly bridge: see bridge/README.md in the repository."
@@ -2279,17 +2510,41 @@ function clientApp() {
     S.patients.forEach(p => (p.appts || []).forEach(a => { if (a.doctor === docId && a.status === "booked") set.add(a.at); }));
     return set;
   }
+  // An outside planning engine (Settings › Planning): its shifts give the times, its visits and blocks take them
+  const extOn = () => !!(S.planner && S.planner.id !== "builtin");
+  const extFor = doc => (extOn() && doc && doc.ext && doc.ext[S.planner.id]) || "";
+  const extLen = () => (S.cfg.slotMinutes || 30) * 60e3;
+  const extStep = () => ((S.ext && S.ext.step) || S.cfg.slotMinutes || 30) * 60e3;
+  function extTimes(doc, day) {
+    const out = new Set(), len = extLen(), step = extStep();
+    (((S.ext && S.ext.shifts) || {})[doc.id] || []).forEach(x => { if (sod(x.start) !== day) return; for (let t = x.start; t + len <= x.end; t += step) out.add(t); });
+    return [...out].sort((a, b) => a - b);
+  }
+  const extTaken = (doc, t) => (((S.ext && S.ext.busy) || {})[doc.id] || []).some(x => t < x.end && t + extLen() > x.start);
+  let diaryAsked = "";
+  function needDiary(from, to) {   // ask the script for the engine's diary for days not loaded yet
+    if (!extOn()) return;
+    from = sod(from); to = sod(to);
+    if (S.ext && S.ext.from <= from && S.ext.to >= to) return;
+    const key = from + ":" + to; if (diaryAsked === key) return;
+    diaryAsked = key; send("planner-diary", { from, to });
+  }
   function workDays(doc) {
+    if (extFor(doc)) {
+      const t0 = sod(Date.now()), days = [...new Set((((S.ext && S.ext.shifts) || {})[doc.id] || []).map(x => sod(x.start)))].filter(d => d >= t0).sort((a, b) => a - b);
+      return days.slice(0, S.cfg.daysAhead || 10);
+    }
+    if (extOn()) return [];   // not linked: no times to offer
     const out = [], n = S.cfg.daysAhead || 10;
     for (let i = 0, d = sod(Date.now()); out.length < n && i < 60; i++, d = sod(d + DAY + 3600e3)) if (doc.days.includes(new Date(d).getDay())) out.push(d);
     return out;
   }
-  const slotTimes = (doc, day) => { const step = (S.cfg.slotMinutes || 30) * 60e3, out = []; for (let t = day + doc.from * 3600e3; t + step <= day + doc.to * 3600e3; t += step) out.push(t); return out; };
+  const slotTimes = (doc, day) => { if (extFor(doc)) return extTimes(doc, day); const step = (S.cfg.slotMinutes || 30) * 60e3, out = []; for (let t = day + doc.from * 3600e3; t + step <= day + doc.to * 3600e3; t += step) out.push(t); return out; };
   // rule(t): why this patient can't have that time (the booking rules), or ""
   function slotsFor(doc, day, rule) {
     const taken = bookedAt(doc.id);
     return slotTimes(doc, day).filter(t => t >= Date.now() + 3600e3)   // not within the next hour
-      .map(t => ({ at: t, free: !taken.has(t), why: rule ? rule(t) : "" }));
+      .map(t => ({ at: t, free: !taken.has(t) && !(extFor(doc) && extTaken(doc, t)), why: rule ? rule(t) : "" }));
   }
   const usable = x => x.free && !x.why;
   // The booking rules for this call's patient (visitConflict is shared with the script)
@@ -2373,6 +2628,7 @@ function clientApp() {
     caseDoc = (c.booking && c.booking.doctor) || (c.summary && c.summary.doctor) || (S.doctors[0] || {}).id || "";
     caseSug = c.status === "waiting" ? suggest(c, caseMove) : null;
     if (caseSug) useTime(caseSug.doctor, caseSug.at);
+    if (extOn()) needDiary(Date.now(), Date.now() + ((S.cfg.daysAhead || 10) + 7) * DAY);
     renderCase(); $("#casesheet").scrollTop = 0;
     if (c.status === "waiting" && !c.plan && S.settings.ai && S.settings.hasKey && needsJudgement(c)) askPlan(c);
   }
@@ -2408,6 +2664,8 @@ function clientApp() {
     const doc = (S.doctors.find(d => d.id === caseDoc)) || S.doctors[0], s = c.summary || {}, pf = prefers(c), pt = byPatient(c.patientId), up = upcomingOf(pt);
     const mv = caseMove && up.find(a => a.id === caseMove), rule = ruleFor(c, caseMove, doc.id);
     const days = workDays(doc);
+    const extNote = !extOn() ? "" : !extFor(doc) ? `<p class="note rule-n">${esc(doc.short)} isn't linked to ${esc(S.planner.label)}, so there are no times to offer. <button class="link small" data-act="planopen" data-v="${esc(S.planner.id)}">Link in ${esc(S.planner.label)} settings</button></p>`
+      : S.ext && S.ext.err ? `<p class="note err">${esc(S.planner.label)}: ${esc(S.ext.err)}</p>` : !S.ext ? `<p class="note">Loading ${esc(S.planner.label)}'s diary…</p>` : `<p class="note">Times from ${esc(S.planner.label)}; the booking goes there.</p>`;
     if (!caseDay || !days.includes(caseDay)) { caseDay = (days.find(d => slotsFor(doc, d, rule).some(usable)) || days[0] || 0); caseSlot = 0; }
     const sl = caseDay ? slotsFor(doc, caseDay, rule) : [];
     const docs = S.doctors.slice().sort((a, b) => (b.id === s.doctor) - (a.id === s.doctor) || (b.spec.includes(s.specialty)) - (a.spec.includes(s.specialty)));
@@ -2426,8 +2684,9 @@ function clientApp() {
           ${!ok(pl.doctor, pl.at) ? `<span class="muted">No longer free</span>` : caseSlot === pl.at && caseDoc === pl.doctor ? `<span class="sug-on">✓ Selected</span>` : `<button class="sm" data-act="usetime" data-v="${esc(pl.doctor)}|${pl.at}">Use</button>`}</div>`
         : S.settings.ai && S.settings.hasKey ? `<button class="link small" data-act="planai" data-id="${esc(c.id)}" ${planBusy[c.id] ? "disabled" : ""}>${planBusy[c.id] ? "✦ Planning…" : "✦ Ask AI to plan this " + esc(word("visit"))}</button>` : ""}
       ${s.hint ? `<p class="bk-hint">${s.kind === "ai" ? "✦ " : ""}${esc(s.hint)}</p>` : ""}
+      ${extNote}
       <label class="lbl-s" for="bkdoc">${esc(word("Staff"))}</label>
-      <select id="bkdoc" class="voicesel bkdoc">${docs.map(d => `<option value="${esc(d.id)}" ${d.id === doc.id ? "selected" : ""}>${esc(d.name)} · ${esc(d.role)}${d.id === s.doctor ? " (suggested)" : ""}</option>`).join("")}</select>
+      <select id="bkdoc" class="voicesel bkdoc">${docs.map(d => `<option value="${esc(d.id)}" ${d.id === doc.id ? "selected" : ""}>${esc(d.name)} · ${esc(d.role)}${d.id === s.doctor ? " (suggested)" : ""}${extOn() && !extFor(d) ? ` (not in ${esc(S.planner.label)})` : ""}</option>`).join("")}</select>
       <div class="days" role="tablist" aria-label="Day">${days.map(d => { const x = slotsFor(doc, d, rule), n = x.filter(usable).length, blocked = !n && x.some(y => y.free && y.why); return `<button class="day ${d === caseDay ? "on" : ""}" data-act="bkday" data-v="${d}" ${n ? "" : "disabled"}><small>${esc(new Date(d).toLocaleDateString(undefined, { weekday: "short" }))}</small><b>${new Date(d).getDate()}</b><i>${n ? n + " free" : blocked ? "not allowed" : "full"}</i></button>`; }).join("")}</div>
       <div class="slots">${sl.length ? sl.map(x => `<button class="slot ${x.at === caseSlot ? "on" : ""} ${usable(x) && prefOk(pf, x.at) ? "pref" : ""} ${x.free && x.why ? "rule" : ""}" data-act="bkslot" data-v="${x.at}" ${usable(x) ? "" : "disabled"} ${x.why ? `title="${esc(x.why)}"` : ""}>${hhmm(x.at)}</button>`).join("") : `<p class="muted">No times left on this day.</p>`}</div>
       ${pf.any ? `<p class="note"><span class="pref-dot"></span> Matches what the caller asked for</p>` : ""}
@@ -2548,12 +2807,12 @@ function clientApp() {
   let calView = "week", calDay = 0;
   const calCache = new Map();
   function load(doc, day) {
-    if (!doc.days.includes(new Date(day).getDay())) return null;
+    if (extOn() ? !extTimes(doc, day).length : !doc.days.includes(new Date(day).getDay())) return null;
     const key = doc.id + day;
     if (calCache.has(key)) return calCache.get(key);
     const ours = new Map();
     S.patients.forEach(p => (p.appts || []).forEach(a => { if (a.doctor === doc.id && (a.status === "booked" || a.status === "done") && a.at >= day && a.at < day + DAY) ours.set(a.at, { p, a }); }));
-    const cells = slotTimes(doc, day).map(t => ours.has(t) ? { t, k: "ours", x: ours.get(t) } : { t, k: "free" });
+    const cells = slotTimes(doc, day).map(t => ours.has(t) ? { t, k: "ours", x: ours.get(t) } : extFor(doc) && extTaken(doc, t) ? { t, k: "taken" } : { t, k: "free" });
     const used = cells.filter(c => c.k !== "free").length, r = { cells, used, total: cells.length, ours: cells.filter(c => c.k === "ours").length, pct: cells.length ? Math.round(used * 100 / cells.length) : 0 };
     calCache.set(key, r); return r;
   }
@@ -2580,6 +2839,13 @@ function clientApp() {
   const noDentists = (what) => `<div class="empty"><h2>No ${esc(word("staffs"))} yet</h2><p>Add the ${esc(word("business"))}'s ${esc(word("staffs"))} in Settings › ${esc(word("Staffs"))}, with their days and hours. ${what}</p><button class="primary" data-act="dentnew">Add a ${esc(word("staff"))}</button></div>`;
   function calHTML() {
     calCache.clear();
+    if (extOn()) {   // the days this view shows, from the engine
+      const t = calDay || sod(Date.now()), d0 = new Date(t);
+      if (calView === "day") needDiary(t, t);
+      else if (calView === "week") needDiary(monday(t), addDays(monday(t), 6));
+      else if (calView === "month") { d0.setDate(1); const f = sod(d0.getTime()); d0.setMonth(d0.getMonth() + 1); needDiary(f, sod(d0.getTime() - DAY)); }
+      else needDiary(addDays(monday(sod(Date.now())), -56), addDays(monday(sod(Date.now())), 27));
+    }
     if (!S.doctors.length) return `<div class="calwrap">${noDentists("The calendar shows how full each of them is.")}</div>`;
     if (!calDay) calDay = sod(Date.now());
     const views = [["day", "Day"], ["week", "Week"], ["month", "Month"], ["trends", "Trends"]];
@@ -2589,7 +2855,8 @@ function clientApp() {
     return `<div class="segbar"><div class="seg wide">${views.map(([v, l]) => `<button class="${calView === v ? "on" : ""}" data-act="calview" data-v="${v}" aria-pressed="${calView === v}">${l}</button>`).join("")}</div></div>
       <div class="calwrap">${calView === "trends" ? "" : `<div class="calnav"><button class="cn-b" data-act="calstep" data-v="-1" aria-label="${calView === "day" ? "Previous day" : calView === "week" ? "Previous week" : "Previous month"}">${CHEV_L}</button><span class="cn-t"><b>${esc(title)}</b>${isNow() ? "" : `<button class="cn-today" data-act="caltoday">Back to today</button>`}</span><button class="cn-b" data-act="calstep" data-v="1" aria-label="${calView === "day" ? "Next day" : calView === "week" ? "Next week" : "Next month"}">${CHEV_R}</button></div>`}
       ${calView === "day" ? calDayHTML() : calView === "week" ? calWeekHTML() : calView === "month" ? calMonthHTML() : calTrendsHTML()}
-      ${calView === "trends" ? "" : `<p class="note cal-k"><i class="k ours"></i> Booked <i class="k free"></i> Free</p>`}</div>`;
+      ${calView === "trends" ? "" : `<p class="note cal-k"><i class="k ours"></i> Booked in Frontly ${extOn() ? `<i class="k taken"></i> Booked in ${esc(S.planner.label)} ` : ""}<i class="k free"></i> Free</p>`}
+      ${extOn() && S.ext && S.ext.err ? `<p class="note err">${esc(S.planner.label)}: ${esc(S.ext.err)}</p>` : ""}</div>`;
   }
   function calDayHTML() {
     const cl = clinicLoad(calDay);
@@ -2712,13 +2979,15 @@ function clientApp() {
   const lockBody = () => document.body.classList.toggle("locked", !!(cfgOpen || aiOpen || K.on || caseId || patId));
 
   // ---- bridge ← Scriptable ----
+  let lastExtAt = 0;
   window.recv = st => {
     S = st;
+    if (S.ext && S.ext.at !== lastExtAt) { lastExtAt = S.ext.at; diaryAsked = ""; }   // a new diary: other days may be asked for again
     aiLoading.clear();
     if (caseId && !byCall(caseId)) caseId = "";
     if (patId && !byPatient(patId)) patId = "";
     if (tab !== "patients" || document.activeElement !== $("#pq")) render(); else renderChrome();
-    renderCase(); renderPat(); renderAI(); renderCfg();
+    renderCase(); renderPat(); renderAI(); renderCfg(); renderPlan();
   };
   function signIn() {
     const who = ($("#dwho") || {}).value, pin = ($("#dpin") || {}).value;
@@ -2873,6 +3142,11 @@ function clientApp() {
       case "toggle": S.settings[v] = !S.settings[v]; send("set", { k: v, v: S.settings[v] }); renderCfg(); renderAI(); break;
       case "aiopen": aiOpen = true; renderAI(); send("state", {}); break;   // fresh token counts
       case "cfgopen": cfgOpen = true; renderCfg(); break;
+      case "planopen": planId = v; renderPlan(); $("#plansheet").scrollTop = 0; break;
+      case "planclose": planId = ""; renderPlan(); break;
+      case "plantest": send("planner-test", { id: planId }); break;
+      case "planimport": send("planner-import", { id: planId }); break;
+      case "planuse": send("planner-use", { id: v }); break;
       case "svcadd": { const i = $("#svcnew"); if (i && i.value.trim()) send("svc-add", { l: i.value }); break; }
       case "svcdel": send("svc-remove", { k: v }); break;
       case "svcreset": send("svc-reset", {}); break;
@@ -2919,8 +3193,10 @@ function clientApp() {
     if (c.contains("ttsvoicesel")) { S.settings.ttsVoice = e.target.value; send("set", { k: "ttsVoice", v: e.target.value }); return; }
     if (c.contains("ttsmodelsel")) { S.settings.ttsModel = e.target.value; send("set", { k: "ttsModel", v: e.target.value }); renderCfg(); return; }
     if (c.contains("ttsinstr")) { S.settings.ttsInstructions = e.target.value.trim(); send("set", { k: "ttsInstructions", v: S.settings.ttsInstructions }); return; }
-    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && !c.contains("bizsel") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
+    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && !c.contains("bizsel") && !c.contains("plancfg") && !c.contains("planlink") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
     if (c.contains("bizsel")) { dent = null; send("business", { v: e.target.value }); return; }
+    if (c.contains("plancfg")) { send("planner-cfg", { id: planId, k: e.target.dataset.k, v: e.target.value }); return; }
+    if (c.contains("planlink")) { send("planner-link", { id: planId, staff: e.target.dataset.staff, ext: e.target.value }); return; }
     if (c.contains("wordin")) { send("words", { k: e.target.dataset.k, v: e.target.value }); return; }
     if (c.contains("bkdoc")) { caseDoc = e.target.value; caseDay = 0; caseSlot = 0; renderCase(); return; }
     if (c.contains("bkmove")) { caseMove = e.target.value; const cc = byCall(caseId); caseSug = cc ? suggest(cc, caseMove) : null; if (caseSug) useTime(caseSug.doctor, caseSug.at); else { caseDay = 0; caseSlot = 0; } renderCase(); return; }
@@ -3160,6 +3436,11 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .q-why{color:var(--ink-2);font-size:calc(15px * var(--ts))}
 .q-bk{font-size:calc(13.5px * var(--ts));font-weight:650;color:var(--signal);margin-top:6px}
 #casesheet,#patsheet{z-index:11}
+#plansheet{z-index:13}
+.lrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--rule)}
+.lrow b{overflow-wrap:anywhere}
+.lrow select{width:100%;min-width:0}
+.plan-r.on{border-color:var(--signal)}
 #casesheet{z-index:12}
 .sumbox{background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:14px 16px;min-width:0;overflow-wrap:anywhere}
 .sumbox p{margin:8px 0 0;font-size:calc(16.5px * var(--ts));line-height:1.5}
@@ -3245,6 +3526,7 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .strip{display:flex;gap:2px;height:22px}
 .strip i,.k{flex:1;border-radius:3px;background:var(--rule)}
 .strip i.ours,.k.ours{background:var(--signal)}
+.strip i.taken,.k.taken{background:var(--ink-2);opacity:.5}
 .strip i.free,.k.free{background:var(--rule)}
 .k{display:inline-block;width:12px;height:12px;vertical-align:-2px;margin:0 2px 0 8px;flex:none}
 .k.urgent{background:var(--amber)}
@@ -3536,6 +3818,7 @@ const buildHTML = () => `<!doctype html><html lang="en" data-theme="${initTheme}
 <div id="casesheet" class="sheet" aria-label="Call note"></div>
 <div id="aisheet" class="sheet" aria-label="AI settings"></div>
 <div id="cfgsheet" class="sheet" aria-label="Settings"></div>
+<div id="plansheet" class="sheet" aria-label="Planning service"></div>
 <div id="bpabout" aria-hidden="true"></div>
 <div id="toast" role="status"></div>
 <script>
@@ -3893,7 +4176,8 @@ async function bootApp(isClosed) {
   });
   Timer.schedule(6000, false, () => { widgetIcon(); });
   Timer.schedule(1500, false, () => { if (!isClosed()) syncLine(false); });   // calls the real line took while Frontly was closed
-  lineTimer = Timer.schedule(20000, true, () => { if (isClosed()) { lineTimer.invalidate(); return; } syncLine(false); });
+  Timer.schedule(1200, false, () => { if (!isClosed()) diaryAhead(); });   // an outside planning engine's diary
+  lineTimer = Timer.schedule(20000, true, () => { if (isClosed()) { lineTimer.invalidate(); return; } syncLine(false); diaryAhead(); });
 }
 let lineTimer = null;
 
