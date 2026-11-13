@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.8.2';
+const VERSION = '1.8.3';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -1274,18 +1274,32 @@ const PLANNERS = {
       return { lines: [`${staff.length} ${staff.length === 1 ? "person takes" : "people take"} bookings`, `${rl.length} cabinet${rl.length === 1 ? "" : "s"}`, st && st.booking_interval ? `Times every ${st.booking_interval} min` : "Times every " + cfg("slotMinutes") + " min"],
         lists: { rooms: rl, staff: staff.map(x => [x.id, x.name]) } };
     },
+    // A week at a time: a long range may come back empty. Replies may be a list, or grouped (by date, or under a key).
     async diary(from, to) {
-      const q = { from: ymd(from), to: ymd(to) };
-      const [shifts, visits, spaces, st] = await Promise.all([this.req("GET", "schedule-shifts", q), this.req("GET", "visits", q).catch(() => []),
-        this.req("GET", "schedule-spaces", q).catch(() => []), this.req("GET", "booking-settings").catch(() => ({}))]);
-      const out = { shifts: [], busy: [], step: (st && +st.booking_interval >= 5) ? +st.booking_interval : 0 };
-      (Array.isArray(shifts) ? shifts : []).forEach(x => { const a = localTime(x.shift_start), b = localTime(x.shift_end); if (x && x.doctor_id && a < b) out.shifts.push({ staff: String(x.doctor_id), start: a, end: b, room: String(x.schedule_cabinets_id || "") }); });
-      [].concat(Array.isArray(visits) ? visits : [], Array.isArray(spaces) ? spaces : []).forEach(x => {
-        if (!x) return;
-        const a = localTime(x.visit_start || x.space_start), b = localTime(x.visit_end || x.space_end), who = String(x.doctor_id || x.created_by_id || "");
-        if (a < b) out.busy.push({ staff: who, start: a, end: b });   // no person: blocked for everyone
-      });
+      const out = { shifts: [], busy: [], step: 0 };
+      const st = await this.req("GET", "booking-settings").catch(() => ({}));
+      out.step = st && +st.booking_interval >= 5 ? +st.booking_interval : 0;
+      for (let a = sod(from); a <= to; a += 7 * DAY) {
+        const q = { from: ymd(a), to: ymd(Math.min(to, a + 6 * DAY)) };
+        const [shifts, visits, spaces] = await Promise.all([this.req("GET", "schedule-shifts", q), this.req("GET", "visits", q).catch(() => []), this.req("GET", "schedule-spaces", q).catch(() => [])]);
+        rowsOf(shifts).forEach(x => { const r = shiftOf(x); if (r) out.shifts.push(r); });
+        rowsOf(visits).concat(rowsOf(spaces)).forEach(x => {
+          const a2 = localTime(x.visit_start || x.space_start || x.start || x.date_start), b2 = localTime(x.visit_end || x.space_end || x.end || x.date_end);
+          const who = String(x.doctor_id || x.staff_id || x.specialist_id || x.created_by_id || "");
+          if (a2 < b2) out.busy.push({ staff: who, start: a2, end: b2 });   // no person: blocked for everyone
+        });
+      }
       return out;
+    },
+    // Settings › Planning › ClinicCards › Check the diary: what one week's shifts look like, to find why times are missing
+    async inspect(from) {
+      const q = { from: ymd(from), to: ymd(from + 6 * DAY) }, raw = await this.req("GET", "schedule-shifts", q);
+      const rows = rowsOf(raw), people = await this.staff().catch(() => []), name = id => (people.find(p => p.id === id) || {}).name || "not in the staff list";
+      const by = {}; rows.forEach(x => { const r = shiftOf(x), k = r ? r.staff : "?"; by[k] = (by[k] || 0) + 1; });
+      const linked = id => ALL_DOCTORS.find(d => d.ext && d.ext.cliniccards === id);
+      return { range: `${q.from} to ${q.to}`, count: rows.length, unread: rows.filter(x => !shiftOf(x)).length,
+        people: Object.entries(by).map(([id, n]) => ({ id, n, name: id === "?" ? "unreadable" : name(id), linked: id !== "?" && linked(id) ? linked(id).short : "" })),
+        fields: rows[0] && typeof rows[0] === "object" ? Object.keys(rows[0]).slice(0, 12) : [], shape: Array.isArray(raw) ? "a list" : raw && typeof raw === "object" ? "grouped: " + Object.keys(raw).slice(0, 4).join(", ") : typeof raw };
     },
     // Everyone on record; page by page while new people come back (an API that ignores "page" repeats page 1: stop)
     async clients() {
@@ -1318,6 +1332,21 @@ const PLANNERS = {
     },
   },
 };
+// Rows from a reply that may be a list, { data|items|shifts|visits: [...] }, or grouped by date { "2026-11-26": [...] }
+function rowsOf(x) {
+  if (Array.isArray(x)) return x.filter(r => r && typeof r === "object");
+  if (!x || typeof x !== "object") return [];
+  for (const k of ["data", "items", "rows", "list", "shifts", "visits", "spaces", "result"]) if (Array.isArray(x[k])) return rowsOf(x[k]);
+  return Object.values(x).flatMap(v => Array.isArray(v) ? rowsOf(v) : v && typeof v === "object" ? (shiftOf(v) || "visit_start" in v || "space_start" in v ? [v] : rowsOf(v)) : []);
+}
+// One ClinicCards shift as Frontly reads it: the person, start and end in local time, the cabinet
+function shiftOf(x) {
+  const who = String(x.doctor_id || x.staff_id || x.specialist_id || x.user_id || x.employee_id || "");
+  const day = x.date || x.shift_date || "";
+  const start = localTime(x.shift_start || x.start || x.date_start || (day && (x.time_start || x.start_time) ? day + " " + (x.time_start || x.start_time) : ""));
+  const end = localTime(x.shift_end || x.end || x.date_end || (day && (x.time_end || x.end_time) ? day + " " + (x.time_end || x.end_time) : ""));
+  return who && start < end ? { staff: who, start, end, room: String(x.schedule_cabinets_id || x.cabinet_id || "") } : null;
+}
 const plannerId = () => PLANNERS[settings.planner] ? settings.planner : "builtin";
 const planner = () => PLANNERS[plannerId()];
 const plannerCfg = id => Object.assign({}, ...(PLANNERS[id].fields || []).map(f => ({ [f.k]: f.def || "" })), (settings.plannerCfg || {})[id] || {});
@@ -1482,7 +1511,7 @@ function clientState() {
     patients, calls: calls.slice(0, 200),
     planner: { id: plannerId(), label: planner().label, can: planner().can },
     planners: Object.entries(PLANNERS).map(([id, P]) => ({ id, label: P.label, about: P.about, help: P.help || "", docs: P.docs || "", builtin: !!P.builtin, can: P.can, secret: P.secret || "",
-      fields: (P.fields || []).map(({ k, label, type, list, help, def }) => ({ k, label, type, list, help, def })), clients: !!P.clients, cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
+      fields: (P.fields || []).map(({ k, label, type, list, help, def }) => ({ k, label, type, list, help, def })), clients: !!P.clients, inspect: !!P.inspect, cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
     ext: extDiary && extDiary.id === plannerId() ? extDiary : null,
     importing: importView(pendingImport),
     doctors: DOCTORS, allDoctors: ALL_DOCTORS, specialties: SPECIALTIES, words: WORDS, business: settings.business || "dental",
@@ -1727,6 +1756,15 @@ async function handle(m) {
       setDoctors(); extDiary = null; saveAll();
       toast(added || linked ? `${added} added, ${linked} linked by name. Set what each one does in Settings › ${cap(WORDS.staffs)}` : "Everyone is linked already");
       return push();
+    }
+    case "planner-inspect": {
+      const P = PLANNERS[m.id];
+      if (!P || !P.inspect) return;
+      settings.plannerState = settings.plannerState || {};
+      const stt = settings.plannerState[m.id] = Object.assign({}, settings.plannerState[m.id]);
+      try { stt.inspect = Object.assign({ at: Date.now() }, await P.inspect(sod(m.from || Date.now()))); }
+      catch (e) { stt.inspect = { at: Date.now(), err: String(e.message || e).slice(0, 160) }; }
+      saveAll(); return push();
     }
     case "planner-diary": if (await loadDiary(m.from, m.to, !!m.force)) push(); return;   // only a fetched diary redraws
     case "copy": if (m.text) { Pasteboard.copy(String(m.text)); toast("Copied"); } return;
@@ -2103,6 +2141,9 @@ function clientApp() {
       <h3 class="sec2">Connection</h3>
       <div class="srow"><div class="grow"><b>API key</b><small class="muted wrap">${key ? `Saved in the Keychain, ends in …${esc(key)}` : esc(P.help)}</small></div><button class="sm" data-act="secret-set" data-v="${esc(P.secret)}">${key ? "Replace" : "Add"}</button>${key ? `<button class="sm danger" data-act="secret-remove" data-v="${esc(P.secret)}">Remove</button>` : ""}</div>
       <div class="srow"><div class="grow"><b>${st.ok ? "✓ Connected" : st.msg ? "Couldn't connect" : "Not tested yet"}</b><small class="muted wrap">${st.ok ? esc(st.lines.join(" · ")) + " · " + esc(rel(st.at)) : st.msg ? esc(st.msg) : "Test it once the key is in."}</small></div><button class="dbb accent" data-act="plantest" ${key ? "" : "disabled"}>Test</button></div>
+      ${P.inspect ? `<div class="srow"><div class="grow"><b>Check the diary</b><small class="muted wrap">What ${esc(P.label)} sends for the week from the date you pick: whose shifts, and whether they're linked. Shows why times may be missing.</small></div>
+        <label class="dbb pickdate insp" aria-label="Check the diary from a date">${CAL_SVG}<span>Check</span><input type="date" class="inspdate" min="${ymdL(Date.now() - 60 * DAY)}" value="${ymdL(Date.now())}" ${st.ok ? "" : "disabled"}></label></div>
+        ${st.inspect ? inspectHTML(st.inspect, P) : ""}` : ""}
       ${P.docs ? `<p class="note">The API: <a href="${esc(P.docs)}">${esc(P.docs.replace(/^https?:\/\//, ""))}</a></p>` : ""}
       ${P.fields.length ? `<h3 class="sec2">Bookings</h3>${P.fields.map(f => `<div class="cfg"><div class="cfg-h"><b>${esc(f.label)}</b></div>${f.help ? `<small class="muted">${esc(f.help)}</small>` : ""}
         ${f.type === "select" ? `<select class="voicesel wide plancfg" data-k="${esc(f.k)}" aria-label="${esc(f.label)}"><option value="">${list(f.list).length ? "Choose" : "Test the connection to load these"}</option>${list(f.list).map(([v, l]) => `<option value="${esc(v)}" ${String(P.cfg[f.k]) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
@@ -2118,6 +2159,13 @@ function clientApp() {
         : `<button class="primary block" data-act="planuse" data-v="${esc(P.id)}" ${st.ok ? "" : "disabled"}>${st.ok ? `Use ${esc(P.label)} for bookings` : "Test the connection first"}</button>`}
     </div>`;
     el.scrollTop = keep;
+  }
+  function inspectHTML(r, P) {
+    if (r.err) return `<p class="note err">${esc(r.err)}</p>`;
+    return `<div class="insp-r"><b>${r.count} shift${r.count === 1 ? "" : "s"} from ${esc(r.range)}</b><small class="muted">The reply is ${esc(r.shape)}${r.fields.length ? `; a shift has: ${esc(r.fields.join(", "))}` : ""}.</small>
+      ${r.people.length ? `<ul class="notes">${r.people.map(x => `<li><p>${esc(x.name)} <span class="muted">(id ${esc(x.id)})</span>: ${x.n} shift${x.n === 1 ? "" : "s"}</p><small class="${x.linked ? "muted" : "rule-n"}">${x.linked ? "Linked to " + esc(x.linked) : x.id === "?" ? "Frontly couldn't read who these are for" : "Not linked to anyone in Frontly"}</small></li>`).join("")}</ul>`
+        : `<p class="note rule-n">No shifts at all that week. In ${esc(P.label)}, free times come from the schedule's shifts: add them there for the people who take bookings.</p>`}
+      ${r.unread ? `<p class="note rule-n">${r.unread} couldn't be read. Send the field names above to whoever set Frontly up.</p>` : ""}</div>`;
   }
   function lineHTML() {
     const L = S.line || {}, tok = ((S.secrets || {}).bridge || {}).last4, last = L.last;
@@ -3525,6 +3573,7 @@ function clientApp() {
     if (c.contains("planlink")) { send("planner-link", { id: planId, staff: e.target.dataset.staff, ext: e.target.value }); return; }
     if (c.contains("wordin")) { send("words", { k: e.target.dataset.k, v: e.target.value }); return; }
     if (c.contains("bkdoc")) { caseDoc = e.target.value; caseDay = casePick || 0; caseSlot = 0; renderCase(); return; }
+    if (c.contains("inspdate")) { const m = String(e.target.value || "").match(/^(\d{4})-(\d\d)-(\d\d)$/); if (m) send("planner-inspect", { id: planId, from: new Date(+m[1], m[2] - 1, +m[3]).getTime() }); return; }
     if (c.contains("bkdate")) {   // Pick a date: any day from today on; the engine's diary for that week is fetched
       const m = String(e.target.value || "").match(/^(\d{4})-(\d\d)-(\d\d)$/);
       if (!m) return;
@@ -3809,6 +3858,9 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .days-row{display:flex;align-items:stretch;gap:8px;margin-top:12px}
 .days-row .days{flex:1;min-width:0;margin:0 0 0 -14px;padding:2px 4px 4px 14px}
 .pickdate{position:relative;flex:none;flex-direction:column;justify-content:center;height:auto;min-height:62px;border-radius:12px;padding:6px 10px;font-size:calc(12.5px * var(--ts));text-align:center;white-space:normal;max-width:84px}
+.insp{min-height:44px;flex-direction:row;max-width:none;border-radius:999px;padding:0 14px}
+.insp-r{background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:10px 12px;margin:4px 0 10px}
+.insp-r b{display:block}
 .pickdate.on{border-color:var(--signal);color:var(--signal)}
 .pickdate input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;-webkit-appearance:none;appearance:none;border:0}
 .slot{padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--rule);background:var(--paper);font:650 calc(15px * var(--ts))/1 var(--rounded);font-variant-numeric:tabular-nums;position:relative}
