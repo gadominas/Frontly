@@ -79,6 +79,22 @@ With the command line instead: `npx wrangler kv namespace create FRONTLY`, put i
 
 Now ring the number from any phone. A few seconds after you hang up (ElevenLabs analyses the call first), Frontly shows *New call from the phone line* while it's open, or when you next open it. The Call tab gets a **Call the real line** card, and the front desk a **📞 Check line** button.
 
+## A quicker, tighter conversation
+
+**The instructions.** Since Frontly 1.13, Reva's instructions tell her to be quick, to use the caller's name at most twice, to ask each question once (a short or unclear "ne" counts as an answer, and one "no" answers a two-part question), and to talk only about the caller's visit, the clinic's treatments and procedures, and medicines and allergies when they matter. After updating Frontly, copy them again: **Settings › Phone line › Reva's instructions › Copy**, then in ElevenLabs open the agent and replace its **System prompt** with them.
+
+**The settings in ElevenLabs** (Agents › your agent; names as of November 2026, the layout changes now and then):
+
+1. **LLM:** pick a fast model, such as a Gemini Flash or Flash-Lite model or ElevenLabs' own low-latency Realtime model, rather than a large one. If the model offers reasoning or a thinking budget, keep it at the lowest: extra thinking delays every reply.
+2. **Voice model:** the Flash models are the fastest (about 75 ms). Check that the one you pick lists Lithuanian and Latvian; if it doesn't, keep the model that does.
+3. **Turn eagerness** (Agent settings): **Eager**, so Reva answers as soon as the caller stops talking. ElevenLabs suggests this for customer service. If she starts cutting callers off mid-sentence, go back to Normal.
+4. **Speculative turn** (Advanced, if shown): on. Reva starts preparing her reply during the caller's pause. It can cost a little more.
+5. **Turn timeout** (Advanced): 5–10 seconds, so a silence is followed up quickly.
+6. **Soft timeout** (Advanced, if shown): on, with a short filler such as "Akimirką" for the rare slow reply.
+7. Keep the system prompt to Frontly's instructions and leave out long knowledge bases: everything the model has to read adds to each reply's delay.
+
+Test with a browser call from the agent's page, then a real call.
+
 ## What it costs (November 2026, check the providers' pages)
 
 - Twilio: the number's monthly rent plus per-minute charges for incoming calls.
