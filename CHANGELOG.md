@@ -2,6 +2,24 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.14.0 (2026-11-13): A review list for every call
+
+- ✅ **Review**: Front desk › Review lists every call nobody has looked at, with what came of it. Booking or closing ticks a call off; ✓ ticks off the rest.
+- ⏳ **When the line is checked next**: A small pie on Check line empties as the next check comes up.
+- 🗑️ **Close and remove that work**: Close without booking shows at once again, and Remove this call takes a call out of Frontly altogether.
+
+**Changes**
+
+- Front desk › Review: calls not yet reviewed, newest first, each with its outcome (booked, waiting, asked about a visit, message passed on, called again, closed) and summary; ✓, Mark all reviewed
+- A call shows whether it's been reviewed, by whom and how (booked, closed, by hand), with Undo; booking and closing tick it off; reopening, a cancelled visit or a repeat call put it back
+- Remove this call, with a confirmation; the client's record and visits stay
+- Check line: a pie counting down to the next background check, and "Next check in N s"
+- Tests: 30-review-list (35 of 35 with the testkit)
+
+**Fixes**
+
+- Close without booking (and reopening a call) didn't show until something else redrew the screen, since 1.8.1 stopped redrawing on idle line checks: it looked as if a cancelled booking couldn't be closed
+
 ## 1.13.0 (2026-11-13): A quicker, tighter receptionist
 
 - 🔁 **No more loops**: Each question is asked once. "Ne", "nėra" or a stuttered "n-no" counts as an answer, and one "no" answers "any medicines or allergies?".

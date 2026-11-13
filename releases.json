@@ -4,6 +4,38 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.14.0",
+      "date": "2026-11-13",
+      "title": "A review list for every call",
+      "highlights": [
+        {
+          "icon": "✅",
+          "title": "Review",
+          "text": "Front desk › Review lists every call nobody has looked at, with what came of it. Booking or closing ticks a call off; ✓ ticks off the rest."
+        },
+        {
+          "icon": "⏳",
+          "title": "When the line is checked next",
+          "text": "A small pie on Check line empties as the next check comes up."
+        },
+        {
+          "icon": "🗑️",
+          "title": "Close and remove that work",
+          "text": "Close without booking shows at once again, and Remove this call takes a call out of Frontly altogether."
+        }
+      ],
+      "changes": [
+        "Front desk › Review: calls not yet reviewed, newest first, each with its outcome (booked, waiting, asked about a visit, message passed on, called again, closed) and summary; ✓, Mark all reviewed",
+        "A call shows whether it's been reviewed, by whom and how (booked, closed, by hand), with Undo; booking and closing tick it off; reopening, a cancelled visit or a repeat call put it back",
+        "Remove this call, with a confirmation; the client's record and visits stay",
+        "Check line: a pie counting down to the next background check, and \"Next check in N s\"",
+        "Tests: 30-review-list (35 of 35 with the testkit)"
+      ],
+      "fixes": [
+        "Close without booking (and reopening a call) didn't show until something else redrew the screen, since 1.8.1 stopped redrawing on idle line checks: it looked as if a cancelled booking couldn't be closed"
+      ]
+    },
+    {
       "version": "1.13.0",
       "date": "2026-11-13",
       "title": "A quicker, tighter receptionist",
