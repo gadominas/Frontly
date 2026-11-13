@@ -2,6 +2,25 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.8.2 (2026-11-13): Pick any date
+
+- 📅 **Pick a date**: Beside the days in the booking box: the date picker opens, and any day from today on shows its free times.
+- 🔌 **Further ahead in ClinicCards**: A picked date fetches that week from ClinicCards, so someone whose next shift is weeks away can still be booked.
+- 💬 **Why there are no times**: A day with no times now says why: no shift, not a working day, or nothing left today.
+
+**Changes**
+
+- Booking box: Pick a date (the iPhone date picker), the picked day added to the strip, selected and scrolled into view
+- With an outside planning engine, a picked date loads that week's diary; a person with no shifts soon is told to pick a date further ahead
+- Frontly's own diary offers no times on someone's day off, and says so
+- The suggestion line naming a dentist shows only when that dentist can be booked
+- Tests: 21-pick-a-date (27 of 27 with the testkit)
+
+**Fixes**
+
+- With ClinicCards, a person without shifts in the next two weeks showed no days at all and no way to choose one
+- "No times left on this day" was squeezed into one narrow column
+
 ## 1.8.1 (2026-11-13): What you type stays put
 
 - ⌨️ **No more vanishing text**: With the phone line on, what you typed in any field was wiped every 20 seconds. It now stays.
