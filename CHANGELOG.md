@@ -2,6 +2,21 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.7.0 (2026-11-13): Import clients and staff
+
+- 📥 **Bring your lists in**: Settings › Data › Import: a CSV file or rows copied from a spreadsheet, for clients or staff, with columns in English or Lithuanian.
+- 👀 **A preview first**: See who's new, who's already here and which rows are skipped and why. Nothing is saved until you tap Import.
+- 🦷 **Patients from ClinicCards**: With ClinicCards set up, its window imports your patients too, linked to their ClinicCards records.
+
+**Changes**
+
+- Import window: Choose a file… or paste; comma, semicolon or tab; quoted text; headers like name, first/last name, phone, age, birth date, notes, role, services, days, hours, or vardas, pavardė, telefonas, gimimo data, pastabos, pareigos, paslaugos
+- Clients are matched by phone number, staff by name ("Dr." or not); records already here are kept as they are and get a missing age or the engine's id
+- Staff rows: services matched to yours, days such as Mon-Fri, Mon;Wed;Fri or Pr-Pn, hours such as 8-16; an unknown service is pointed out
+- Planning engines may offer clients() for Import patients; ClinicCards reads its patients page by page
+- Import from Settings › Data, from the empty client list, and from the ClinicCards window
+- Tests: 18-import (24 of 24 with the testkit)
+
 ## 1.6.0 (2026-11-13): Book into ClinicCards
 
 - 🔌 **Planning engines**: Settings › Planning: book in Frontly's own diary, or straight into ClinicCards. More planning services can plug in the same way.
