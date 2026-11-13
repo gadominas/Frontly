@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.10.0';
+const VERSION = '1.11.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -1263,6 +1263,9 @@ async function aiPlan(m) {
 //                     { shifts: [{ staff, start, end, room }], busy: [{ staff, start, end }], step: minutes|0 }
 //   book(x)           books { staff, start, end, room, client: { name, phone, ref }, note } there: { ref, client }
 //   clients()         optional: everyone on record there, [{ id, name, phone, birth }], for Import
+//   findClient(phone) optional: their id for a phone number, or ""
+//   clientVisits(id, from, to)  optional: one client's visits there, { visits: [{ ref, start, end, staff, note, status }] },
+//                     for the client's page (fetched when it opens, and with Refresh)
 //   cancel(x)         optional: cancels { ref, reason } there; without it (can.cancel false) the user is told to do it
 //                     there too. ClinicCards has none yet: its published API shows no call for it.
 // Frontly's staff are linked to the engine's people (doctor.ext[engine] = their id); times come from the engine's
@@ -1337,6 +1340,35 @@ const PLANNERS = {
       return { range: `${q.from} to ${q.to}`, count: rows.length, unread: rows.filter(x => !shiftOf(x)).length,
         people: Object.entries(by).map(([id, n]) => ({ id, n, name: id === "?" ? "unreadable" : name(id), linked: id !== "?" && linked(id) ? linked(id).short : "" })),
         fields: rows[0] && typeof rows[0] === "object" ? Object.keys(rows[0]).slice(0, 12) : [], shape: Array.isArray(raw) ? "a list" : raw && typeof raw === "object" ? "grouped: " + Object.keys(raw).slice(0, 4).join(", ") : typeof raw };
+    },
+    async findClient(phone) {
+      const d = String(phone || "").replace(/\D/g, "");
+      if (d.length < 6) return "";
+      const f = await this.req("GET", "patients", { phone: d });
+      const rows = rowsOf(f).filter(p => p.patient_id);   // the one with that number; a lone row without a number is theirs
+      const hit = rows.find(p => p.phone && samePhone(p.phone, d)) || (rows.length === 1 && !rows[0].phone ? rows[0] : null);
+      return hit ? String(hit.patient_id) : "";
+    },
+    // One patient's visits, a month at a time. Only rows that say they're this patient's count: if ClinicCards' visits
+    // don't carry a patient id, that's said, rather than putting other people's visits on this card.
+    async clientVisits(pid, from, to) {
+      const out = [], seen = new Set(); let rows = 0, withWho = 0;
+      for (let a = sod(from); a <= to; a += 31 * DAY) {
+        const q = { from: ymd(a), to: ymd(Math.min(to, a + 30 * DAY)), patient_id: pid };
+        rowsOf(await this.req("GET", "visits", q)).forEach(x => {
+          rows++;
+          const who = x.patient_id != null ? String(x.patient_id) : x.patient && x.patient.patient_id != null ? String(x.patient.patient_id) : null;
+          if (who != null) withWho++;
+          if (who !== String(pid)) return;
+          const start = localTime(x.visit_start || x.start || x.date_start), end = localTime(x.visit_end || x.end || x.date_end);
+          const ref = String(x.visit_id || x.id || `${x.doctor_id}@${x.visit_start}`);
+          if (!(start < end) || seen.has(ref)) return;
+          seen.add(ref);
+          out.push({ ref, start, end, staff: String(x.doctor_id || x.staff_id || ""), note: String(x.note || x.comment || x.description || ""), status: String(x.status || "").toUpperCase(), cabinet: String(x.cabinet_id || "") });
+        });
+      }
+      if (rows && !withWho) throw new Error("ClinicCards' visits don't say whose they are, so Frontly can't tell which are this patient's");
+      return { visits: out };
     },
     // Everyone on record; page by page while new people come back (an API that ignores "page" repeats page 1: stop)
     async clients() {
@@ -1463,6 +1495,60 @@ async function bookAtEngine(c, pt, doc, at, why, info, dur) {
   return Object.assign({ planner: id, note: ["full", "shorter", "short"][sent] }, r);
 }
 
+// ---------- a client's visits, from the planning engine ----------
+// Opening a client's page fetches their visits from the engine (when the last fetch is over 10 minutes old; Refresh any
+// time). Visits there are matched to Frontly's own by the engine's id, or by time and person; new ones are added,
+// marked as from the engine; a Frontly booking no longer there is marked cancelled there. pt.sync[engine] says when.
+const syncing = new Set();
+function syncEngineId() { const id = plannerId(); if (id !== "builtin" && PLANNERS[id].clientVisits) return id; const st = settings.plannerState || {}; return Object.keys(PLANNERS).find(k => !PLANNERS[k].builtin && PLANNERS[k].clientVisits && st[k] && st[k].ok) || ""; }
+async function syncClient(ptId, force) {
+  const id = syncEngineId(), P = PLANNERS[id], pt = patients.find(p => p.id === ptId);
+  if (!id || !pt || syncing.has(ptId)) return false;
+  const last = (pt.sync || {})[id];
+  if (!force && last && !last.err && Date.now() - last.at < 10 * 60e3) return false;
+  syncing.add(ptId);
+  const from = sod(Date.now()) - 365 * DAY, to = sod(Date.now()) + 180 * DAY;
+  try {
+    let ref = pt.ext && pt.ext[id];
+    if (!ref && P.findClient) { ref = await P.findClient(pt.phone); if (ref) pt.ext = Object.assign({}, pt.ext, { [id]: ref }); }
+    if (!ref) { pt.sync = Object.assign({}, pt.sync, { [id]: { at: Date.now(), n: 0, missing: true } }); return true; }
+    const { visits } = await P.clientVisits(ref, from, to);
+    const byExt = {}; ALL_DOCTORS.forEach(d => { if (d.ext && d.ext[id]) byExt[d.ext[id]] = d.id; });
+    pt.appts = pt.appts || [];
+    const seen = new Set();
+    let added = 0;
+    visits.forEach(v => {
+      const doctor = byExt[v.staff] || "", dur = Math.max(5, Math.round((v.end - v.start) / 60e3));
+      const cancelled = /CANCEL|DELETED|REJECT/.test(v.status);
+      let a = pt.appts.find(x => x.ext && x.ext.planner === id && x.ext.ref && x.ext.ref === v.ref)
+        || pt.appts.find(x => !(x.ext && x.ext.ref) && x.at === v.start && (!doctor || x.doctor === doctor));
+      const status = cancelled ? "cancelled" : v.start < Date.now() ? (a && a.status === "cancelled" ? "cancelled" : "done") : "booked";
+      if (a) {
+        a.ext = Object.assign({}, a.ext, { planner: id, ref: v.ref }); a.at = v.start; a.dur = dur; if (doctor) a.doctor = doctor;
+        if (a.status !== "cancelled" || cancelled) a.status = status;
+      } else {
+        const first = v.note.split("\n").map(x => x.trim()).find(Boolean) || "";
+        a = { id: "a-" + id.slice(0, 2) + "-" + v.ref.replace(/[^\w-]/g, "").slice(0, 24), at: v.start, dur, doctor, reason: first.replace(/^Booked by Frontly:\s*/, "").slice(0, 80) || `${cap(WORDS.visit)} in ${P.label}`,
+          status, made: Date.now(), ext: { planner: id, ref: v.ref }, fromEngine: id, extStaff: doctor ? "" : v.staff };
+        pt.appts.push(a); added++;
+      }
+      seen.add(a.id);
+    });
+    // a Frontly booking ahead that isn't in the engine any more: cancelled there
+    pt.appts.forEach(a => {
+      if (a.status === "booked" && a.ext && a.ext.planner === id && a.ext.ref && a.at >= from && a.at <= to && !seen.has(a.id)) {
+        a.status = "cancelled"; a.cancelled = { at: Date.now(), by: P.label, reason: `Not in ${P.label} any more` };
+        const c = a.callId && calls.find(x => x.id === a.callId); if (c && c.status === "booked") { c.status = "waiting"; delete c.booking; }
+      }
+    });
+    pt.appts.sort((a, b) => a.at - b.at);
+    pt.sync = Object.assign({}, pt.sync, { [id]: { at: Date.now(), n: visits.length, added } });
+  } catch (e) {
+    pt.sync = Object.assign({}, pt.sync, { [id]: Object.assign({}, last, { at: Date.now(), err: String(e.message || e).slice(0, 160) }) });
+  } finally { syncing.delete(ptId); }
+  return true;
+}
+
 // ---------- import ----------
 // Clients and staff from a file or pasted rows (CSV from Excel, Numbers, Google Sheets; comma, semicolon or tab;
 // a header row names the columns, in English or Lithuanian), or from a planning engine. A preview first: what's new,
@@ -1579,6 +1665,7 @@ function clientState() {
   return {
     patients, calls: calls.slice(0, 200),
     planner: { id: plannerId(), label: planner().label, can: planner().can },
+    syncWith: syncEngineId() ? { id: syncEngineId(), label: PLANNERS[syncEngineId()].label } : null,
     planners: Object.entries(PLANNERS).map(([id, P]) => ({ id, label: P.label, cancels: !!P.cancel || !!P.builtin, about: P.about, help: P.help || "", docs: P.docs || "", builtin: !!P.builtin, can: P.can, secret: P.secret || "",
       fields: (P.fields || []).map(({ k, label, type, list, help, def }) => ({ k, label, type, list, help, def })), clients: !!P.clients, inspect: !!P.inspect, cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
     ext: extDiary && extDiary.id === plannerId() ? extDiary : null,
@@ -1720,6 +1807,11 @@ async function handle(m) {
       const c = deskRequest(pt, m, false);
       saveAll(); saveWidget(widgetSnapshot()); push();
       return call("__done", m.req, true, "case:" + c.id);
+    }
+    case "pat-sync": {
+      const changed = await syncClient(m.id, !!m.force);
+      if (changed) { saveAll(); saveWidget(widgetSnapshot()); push(); }
+      return m.req ? call("__done", m.req, true, "") : undefined;
     }
     case "pat-remove": {
       const err = removePatient(m.id);
@@ -3423,6 +3515,26 @@ function clientApp() {
       <div class="dlg-btns"><button class="sm" data-act="dlgkeep">Keep it</button><button class="dlg-go" data-act="dlgcancel" ${dlg.busy ? "disabled" : ""}>${dlg.busy ? "Cancelling…" : `Cancel ${esc(word("visit"))}`}</button></div>
     </div>`;
   }
+  // The client's visits from the planning engine: when they were last fetched, and Refresh
+  const patSyncing = new Set();
+  function syncHTML(p) {
+    const W = S.syncWith, st = (p.sync || {})[W.id], busy = patSyncing.has(p.id);
+    const line = busy ? `Fetching ${esc(word("visits"))} from ${esc(W.label)}…`
+      : !st ? `Not fetched from ${esc(W.label)} yet`
+      : st.err ? (st.err.startsWith(W.label) ? esc(st.err) : `${esc(W.label)}: ${esc(st.err)}`)
+      : st.missing ? `Not found in ${esc(W.label)} by phone number`
+      : `${st.n} ${st.n === 1 ? esc(word("visit")) : esc(word("visits"))} in ${esc(W.label)} · fetched ${esc(rel(st.at))}${st.added ? ` · ${st.added} new` : ""}`;
+    return `<div class="syncrow ${st && st.err ? "bad" : ""}"><span class="sync-t"><b>${esc(W.label)}</b><small>${line}</small></span>
+      <button class="dbb" data-act="patsync" data-id="${esc(p.id)}" ${busy ? "disabled" : ""} aria-label="Fetch ${esc(p.name)}'s ${esc(word("visits"))} from ${esc(W.label)}">${busy ? SPIN_SVG : SYNC_SVG}<span>${busy ? "Fetching" : "Refresh"}</span></button></div>`;
+  }
+  const SYNC_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9M4 13a8 8 0 0 0 14.3 4.9M5.5 3.5v3.2h3.2M18.5 20.5v-3.2h-3.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  function syncPat(id, force) {
+    if (!S.syncWith || patSyncing.has(id)) return;
+    const st = ((byPatient(id) || {}).sync || {})[S.syncWith.id];
+    if (!force && st && !st.err && Date.now() - st.at < 10 * 60e3) return;   // fetched in the last 10 minutes
+    patSyncing.add(id); renderPat();
+    send("pat-sync", { id, force: !!force }, () => { patSyncing.delete(id); renderPat(); });
+  }
   function renderPat() {
     const el = $("#patsheet"), keep = el.scrollTop, p = patId && byPatient(patId);
     el.classList.toggle("open", !!p); lockBody();
@@ -3433,8 +3545,9 @@ function clientApp() {
     el.innerHTML = `<div class="sh-head"><h2>${esc(p.name)}</h2><button class="link" data-act="patclose">Done</button></div><div class="sh-body">
       ${patEdit === p.id ? patForm(p) : `<dl class="facts"><div><dt>Phone</dt><dd>${esc(p.phone)}</dd></div>${p.age ? `<div><dt>Age</dt><dd>${esc(p.age)}</dd></div>` : ""}<div><dt>${esc(word("Client"))} since</dt><dd>${esc(new Date(p.since).toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</dd></div></dl>
       <div class="pe-row"><button class="dbb" data-act="patedit" data-id="${esc(p.id)}">${EDIT_SVG}<span>Edit details</span></button><button class="dbb accent" data-act="regopen" data-v="${esc(p.id)}">${PLUS_SVG}<span>New request</span></button></div>`}
+      ${S.syncWith ? syncHTML(p) : ""}
       <h3 class="sec2">Coming up</h3>
-      ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}${a.dur ? "–" + hhmm(a.at + a.dur * 60e3) : ""}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || "")}${a.ext ? ` · ${esc(((S.planners || []).find(x => x.id === a.ext.planner) || {}).label || "")}` : ""}</small></div>${a.info ? `<button class="sm" data-act="apptinfo" data-v="${esc(a.id)}" aria-expanded="${apptOpen === a.id}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}<button class="sm danger" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">Cancel</button></div>${apptOpen === a.id ? apptInfoHTML(a) : ""}`).join("") : `<p class="muted">Nothing booked.</p>`}
+      ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}${a.dur ? "–" + hhmm(a.at + a.dur * 60e3) : ""}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || (a.extStaff ? "person " + a.extStaff : ""))}${a.ext ? ` · ${a.fromEngine ? "from " : ""}${esc(((S.planners || []).find(x => x.id === a.ext.planner) || {}).label || "")}` : ""}</small></div>${a.info ? `<button class="sm" data-act="apptinfo" data-v="${esc(a.id)}" aria-expanded="${apptOpen === a.id}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}<button class="sm danger" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">Cancel</button></div>${apptOpen === a.id ? apptInfoHTML(a) : ""}`).join("") : `<p class="muted">Nothing booked.</p>`}
       <h3 class="sec2">Message for ${esc(p.name.split(" ")[0])}</h3>
       ${p.message ? `<div class="appt msg"><div class="grow"><b>“${esc(p.message.text)}”</b><small>${esc(S.assistant)} passes it on at the next call · ${esc(p.message.by)}, ${esc(dayLabel(p.message.at))}</small></div><button class="sm" data-act="patmsgclear" data-id="${esc(p.id)}">Remove</button></div>`
         : `<p class="muted">${esc(S.assistant)} passes a message on when ${esc(p.name.split(" ")[0])} next phones.</p><textarea id="patmsg" class="cfgin wide" rows="2" placeholder="For example: please bring your X-rays on Friday"></textarea><button class="sm" data-act="patmsg" data-id="${esc(p.id)}">Save message</button>`}
@@ -3442,7 +3555,7 @@ function clientApp() {
       <h3 class="sec2">Calls</h3>
       ${cl.length ? cl.map(c => `<button class="crow" data-act="opencase" data-id="${esc(c.id)}"><span class="stripe tri-${esc((c.summary || {}).triage || "routine")}"></span><span class="grow"><b>${esc((c.summary || {}).reason || "Call")}</b><small>${esc(whenFull(c.at))}${INTENT_L[c.intent] ? " · " + INTENT_L[c.intent] : c.followUp ? " · called again" : ""}${c.mood ? " · " + (S.moods[c.mood.label] || "") + " " + esc(c.mood.label) : ""}</small></span>${statusPill(c)}</button>`).join("") : `<p class="muted">No calls yet.</p>`}
       <h3 class="sec2">${esc(word("Visits"))}</h3>
-      ${past.length ? `<ul class="hist">${past.map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}${a.cancelled ? `<small class="muted cx">Cancelled${a.cancelled.by ? " by " + esc(a.cancelled.by) : ""}, ${esc(dayLabel(a.cancelled.at))}${a.cancelled.reason ? ": " + esc(a.cancelled.reason) : ""}</small>` : ""}${a.info ? ` <button class="link small" data-act="apptinfo" data-v="${esc(a.id)}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}${apptOpen === a.id ? apptInfoHTML(a) : ""}</li>`).join("")}</ul>` : `<p class="muted">No ${esc(word("visits"))} yet.</p>`}
+      ${past.length ? `<ul class="hist">${past.map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.fromEngine ? ` <span class="pill soft">${esc(((S.planners || []).find(x => x.id === a.fromEngine) || {}).label || "")}</span>` : ""}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}${a.cancelled ? `<small class="muted cx">Cancelled${a.cancelled.by ? " by " + esc(a.cancelled.by) : ""}, ${esc(dayLabel(a.cancelled.at))}${a.cancelled.reason ? ": " + esc(a.cancelled.reason) : ""}</small>` : ""}${a.info ? ` <button class="link small" data-act="apptinfo" data-v="${esc(a.id)}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}${apptOpen === a.id ? apptInfoHTML(a) : ""}</li>`).join("")}</ul>` : `<p class="muted">No ${esc(word("visits"))} yet.</p>`}
       <h3 class="sec2">Notes</h3>
       ${(p.notes || []).length ? `<ul class="notes">${p.notes.map(n => `<li><p>${esc(n.text)}</p><small class="muted">${esc(n.by)} · ${esc(dayLabel(n.at))}</small></li>`).join("")}</ul>` : `<p class="muted">No notes yet.</p>`}
       <textarea id="patnote" class="cfgin wide" rows="3" placeholder="Add a note to ${esc(p.name.split(" ")[0])}'s record"></textarea>
@@ -3579,7 +3692,8 @@ function clientApp() {
       case "apptinfo": apptOpen = apptOpen === v ? "" : v; apptTx = ""; renderPat(); break;
       case "appttx": apptTx = apptTx === v ? "" : v; renderPat(); break;
       case "addnote": { const ta = $("#casenote"), c = byCall(id); if (ta && ta.value.trim() && c) { send("note", { call: id, patient: c.patientId, text: ta.value }); ta.value = ""; } break; }
-      case "openpat": patId = id; patArmed = ""; patEdit = ""; patErr = ""; patDraft = null; renderPat(); $("#patsheet").scrollTop = 0; break;
+      case "patsync": syncPat(id, true); break;
+      case "openpat": patId = id; patArmed = ""; patEdit = ""; patErr = ""; patDraft = null; setTimeout(() => syncPat(id, false), 0); renderPat(); $("#patsheet").scrollTop = 0; break;
       case "patclose": patId = ""; patEdit = ""; patErr = ""; patDraft = null; renderPat(); break;
       case "pfilter": patFilter = v; render(); break;
       case "line-sync": if (!(S.line && S.line.busy)) send("line-sync", {}); break;
@@ -3977,6 +4091,11 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 #plansheet{z-index:13}
 #impsheet{z-index:14}
 #regsheet{z-index:12}
+.syncrow{display:flex;align-items:center;gap:10px;margin:12px 0 2px;padding:10px 12px;border:1px solid var(--rule);border-radius:14px;background:var(--sheet)}
+.syncrow.bad{border-color:var(--amber)}
+.sync-t{flex:1;min-width:0;display:flex;flex-direction:column}
+.sync-t small{color:var(--muted);font-size:calc(13px * var(--ts))}
+.syncrow.bad .sync-t small{color:var(--amber)}
 .lens{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:6px -14px 4px;padding:2px 14px 4px}
 .chip.len{flex:none;font-variant-numeric:tabular-nums}
 .chip.len.sug:not(.on){border-color:var(--signal);color:var(--signal)}

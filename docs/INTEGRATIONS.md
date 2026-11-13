@@ -33,6 +33,8 @@ Frontly asks for the diary a week at a time and reads replies given as a list, u
 
 Each visit's `note` carries everything Frontly knows: who booked it and how the request came in, the reason, triage, service and warnings, the AI summary, every detail collected, the mood, the front-desk notes, earlier visits and the whole conversation (up to 8,000 characters). If ClinicCards refuses it, Frontly tries a shorter note without the conversation, then the short line. Cancelling: ClinicCards' published API shows no call to cancel or change a visit, so Frontly cancels its own copy and tells you to cancel it in ClinicCards too. An engine that can cancel gets a `cancel({ ref, reason })` function; the dialog then says it cancels there too.
 
+**A client's visits.** Opening a client's card fetches their visits from ClinicCards (`GET visits?from&to&patient_id`, a month at a time, a year back and six months ahead), when the last fetch is more than 10 minutes old; **Refresh** fetches any time. The card shows how many there are and when they were fetched. The client is found by the ClinicCards id Frontly keeps, or by phone number. Only visits that carry this client's `patient_id` are taken: if ClinicCards' visits carry none, Frontly says so instead of guessing. Visits are matched to Frontly's own by id (or time and person) or added, marked as from ClinicCards; a Frontly booking that ClinicCards no longer has is marked cancelled there.
+
 Before booking, Frontly reads that day's diary again, so a time taken in ClinicCards a moment ago isn't booked twice. Times are the clinic's local time; the phone running Frontly should be in the same time zone. Each booking sends the caller's name and phone number to ClinicCards.
 
 ## Adding another engine

@@ -112,6 +112,7 @@ What else you need:
 | Book a caller | Tap the call: the suggested time is already selected. Change the dentist, day or time if you like, tap **Book** |
 | Choose how long | **How long** in the booking box: 5 min to 3 h. The suggestion says why: what the caller asked for ("an hour", "pusvalandžio"), the AI's estimate from the reason, or the service's usual length (Settings › Business). Only times with room for that long are offered |
 | Book a later date | **Pick a date** beside the days opens the date picker; any day from today on, with its free times (from ClinicCards when it's in use) |
+| See a client's ClinicCards visits | Open their card: their visits are fetched (at most every 10 minutes) and the card says when; **Refresh** fetches again |
 | Cancel a visit | **Cancel** on the client's page or in the case: a dialog shows the visit and asks why (optional). The reason and who cancelled stay in the history |
 | See what went with a booking | **Details** on a visit: the note, every detail, the conversation, and how much of it went to ClinicCards |
 | Move a visit | A call asking to change a booking shows **Visit to move**; pick the new time and tap **Move to …** |
