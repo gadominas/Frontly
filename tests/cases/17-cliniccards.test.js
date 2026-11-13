@@ -81,7 +81,7 @@ scenario('cliniccards', async (t) => {
   const v = posted.find((x) => x[0] === 'visits')[1], pa = posted.find((x) => x[0] === 'patients')[1];
   t.see('visit', JSON.stringify(v));
   t.check(pa.firstname === 'Jonas' && pa.lastname === 'Petrauskas' && pa.phone === '37061234567', 'the patient is created there, number in full digits');
-  t.check(v.status === 'BOOKING' && v.patient_id === '777' && v.doctor_id === '12' && v.cabinet_id === '5' && /^\d{4}-\d\d-\d\d$/.test(v.date) && v.time_start === pick.textContent && /^\d\d:\d\d$/.test(v.time_end) && /^Booked by Frontly: Root canal pain$/.test(v.note), 'a BOOKING visit with the doctor, cabinet, day, times and note');
+  t.check(v.status === 'BOOKING' && v.patient_id === '777' && v.doctor_id === '12' && v.cabinet_id === '5' && /^\d{4}-\d\d-\d\d$/.test(v.date) && v.time_start === pick.textContent && /^\d\d:\d\d$/.test(v.time_end) && /^Booked by Frontly: Root canal pain\n\nBooked by Frontly \(Agnė Petrauskaitė\)/.test(v.note) && /\nReason: Root canal pain\n/.test(v.note), 'a BOOKING visit with the doctor, cabinet, day, times and note');
   await app.until(() => (app.json(app.path('patients.json')) || []).length === 1, 2000, 'Frontly’s copy');
   const jp = app.json(app.path('patients.json'))[0];
   t.check(jp.ext.cliniccards === '777' && jp.appts[0].ext.planner === 'cliniccards' && jp.appts[0].ext.ref === '4242', 'Frontly keeps its copy, with ClinicCards’ patient and visit ids');
@@ -100,7 +100,7 @@ scenario('cliniccards', async (t) => {
   app.tap('[data-act="tab"][data-v="patients"]');
   await app.until(() => app.$('[data-act="openpat"]'), 2000, 'patients');
   app.tap('[data-act="openpat"]'); await app.until(() => app.$('#patsheet [data-act="apptcancel"]'), 2000, 'the visit');
-  app.tap('#patsheet [data-act="apptcancel"]'); app.tap('#patsheet [data-act="apptcancel"]');
+  app.tap('#patsheet [data-act="apptcancel"]'); await app.until(() => app.$('#dlg.open'), 2000, 'the dialog'); app.tap('#dlg [data-act="dlgcancel"]');
   await app.until(() => /Cancel it in ClinicCards too/.test(app.text('#toast')), 2000, 'the toast');
   t.check(true, 'cancelled in Frontly, with a reminder to cancel it in ClinicCards');
   app.tap('[data-act="patclose"]');

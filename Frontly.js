@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.8.3';
+const VERSION = '1.9.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -1158,12 +1158,14 @@ async function bookCall(m) {
   if (why) return why;
   const reason = (move && move.reason) || (c.summary && c.summary.reason) || c.fields.complaint || "Visit";
   let ext = null;
-  if (plannerId() !== "builtin") { try { ext = await bookAtEngine(c, pt, doc, at, reason); } catch (e) { return String(e.message || e); } }
+  const info = bookingInfo(c, pt);
+  if (plannerId() !== "builtin") { try { ext = await bookAtEngine(c, pt, doc, at, reason, info); } catch (e) { return String(e.message || e); } }
   if (!pt) { pt = { id: "p-" + Date.now().toString(36), name: c.fields.name || "Caller " + c.phone, age: c.fields.age || null, phone: c.phone, since: Date.now(), notes: [], appts: [] }; patients.push(pt); c.patientId = pt.id; }
   if (ext && ext.client) pt.ext = Object.assign({}, pt.ext, { [ext.planner]: ext.client });
   pt.appts = pt.appts || [];
   const a = { id: "a-" + Date.now().toString(36), at, doctor: doc.id, spec, reason, callId: c.id, status: "booked", by: settings.deskUser, made: Date.now() };
-  if (ext) a.ext = { planner: ext.planner, ref: ext.ref };   // booked there too
+  a.info = info;   // what Frontly knew when it was booked: the client's page shows it under Details
+  if (ext) a.ext = { planner: ext.planner, ref: ext.ref, note: ext.note };   // booked there too, with that much of the story
   pt.appts.push(a);
   if (move) {   // a change of booking moves the visit; the call that booked it shows where it went
     move.status = "moved"; move.movedTo = a.id; a.movedFrom = move.id;
@@ -1177,7 +1179,7 @@ async function bookCall(m) {
 function cancelAppt(m) {
   const pt = patients.find(p => p.id === m.patient), a = pt && (pt.appts || []).find(x => x.id === m.appt);
   if (!a) return;
-  a.status = "cancelled";
+  a.status = "cancelled"; a.cancelled = { at: Date.now(), by: settings.deskUser || "", reason: String(m.reason || "").trim().slice(0, 300) };
   const c = a.callId && calls.find(x => x.id === a.callId);
   if (c && c.status === "booked") { c.status = "waiting"; delete c.booking; }
 }
@@ -1228,6 +1230,8 @@ async function aiPlan(m) {
 //                     { shifts: [{ staff, start, end, room }], busy: [{ staff, start, end }], step: minutes|0 }
 //   book(x)           books { staff, start, end, room, client: { name, phone, ref }, note } there: { ref, client }
 //   clients()         optional: everyone on record there, [{ id, name, phone, birth }], for Import
+//   cancel(x)         optional: cancels { ref, reason } there; without it (can.cancel false) the user is told to do it
+//                     there too. ClinicCards has none yet: its published API shows no call for it.
 // Frontly's staff are linked to the engine's people (doctor.ext[engine] = their id); times come from the engine's
 // diary, and Frontly keeps its own copy of every booking for the front desk, the calendar and the phone line.
 // To add an engine: an entry here, its secret in SECRETS, and a test in tests/cases with its API faked.
@@ -1327,7 +1331,7 @@ const PLANNERS = {
         pid = String((made && made.patient_id) || (Array.isArray(made) && made[0] && made[0].patient_id) || "");
         if (!pid) throw new Error("ClinicCards didn't create the patient");
       }
-      const v = await this.req("POST", "visits", undefined, { status: "BOOKING", patient_id: pid, cabinet_id: x.room, doctor_id: x.staff, note: String(x.note || "").slice(0, 400), date: ymd(x.start), time_start: hm(x.start), time_end: hm(x.end) });
+      const v = await this.req("POST", "visits", undefined, { status: "BOOKING", patient_id: pid, cabinet_id: x.room, doctor_id: x.staff, note: String(x.note || "").slice(0, 8000), date: ymd(x.start), time_start: hm(x.start), time_end: hm(x.end) });
       return { ref: String((v && (v.visit_id || v.id)) || (Array.isArray(v) && v[0] && (v[0].visit_id || v[0].id)) || ""), client: pid };
     },
   },
@@ -1377,8 +1381,34 @@ async function loadDiary(from, to, force) {
   return changed;
 }
 const diaryAhead = () => loadDiary(Date.now(), Date.now() + (cfg("daysAhead") + 7) * DAY).then(changed => { if (changed) push(); }).catch(() => {});
+// Everything Frontly knows that goes with a booking: kept on the visit (a.info) and sent as the engine's note.
+function bookingInfo(c, pt) {
+  const s = c.summary || {}, f = c.fields || {};
+  return { at: Date.now(), by: settings.deskUser || "", source: c.source || c.engine || "", provider: c.provider || "", callAt: c.at, dur: c.dur || 0,
+    reason: s.reason || f.complaint || "", summary: s.text || "", noteBy: s.kind === "ai" ? (s.provider || "AI") : s.kind || "", triage: s.triage || "", priority: s.priority || null,
+    service: SPECIALTIES[s.specialty] || s.specialty || "", flags: (s.flags || []).slice(0, 6), hint: s.hint || "", intent: c.intent || "",
+    fields: FIELD_KEYS.reduce((o, k) => { if (f[k] != null && f[k] !== "") o[k] = f[k]; return o; }, {}), mood: c.mood ? { label: c.mood.label, note: c.mood.note || "" } : null,
+    deskNotes: (c.deskNotes || []).slice(0, 10).map(n => ({ by: n.by, at: n.at, text: n.text })), transcript: (c.transcript || []).slice(-80).map(x => ({ who: x.who, t: String(x.t || "").slice(0, 500) })) };
+}
+const FIELD_NAMES = () => Object.assign({}, FIELD_LABELS, BIZ.labels);
+// The note for the engine: everything, then shorter versions if it refuses a long one
+function bookingNote(info, pt, level) {
+  const L = FIELD_NAMES(), when = t => new Date(t).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const src = info.source === "phone" ? "Real phone call" + (info.provider ? " (" + info.provider + ")" : "") : info.source === "desk" ? "Registered at the front desk" : "Call in Frontly";
+  const head = [`Booked by Frontly${info.by ? " (" + info.by + ")" : ""}, ${when(info.at)}`, `${src}, ${when(info.callAt)}${info.dur ? `, ${Math.round(info.dur / 60)} min` : ""}`,
+    `Reason: ${info.reason || "-"}`, `Triage: ${info.triage || "-"}${info.priority ? `, priority ${info.priority}/5` : ""}${info.service ? `, ${info.service}` : ""}`].concat(info.flags.length ? [`Warnings: ${info.flags.join("; ")}`] : []);
+  if (level === 2) return head.slice(0, 3).join("\n").slice(0, 380);
+  const fields = Object.entries(info.fields).filter(([k]) => k !== "name").map(([k, v]) => `${L[k] || k}: ${k === "pain" ? v + "/10" : k === "urgency" ? v + "/5" : v}`);
+  const mid = [].concat(info.summary ? ["", "Summary" + (info.noteBy ? ` (${info.noteBy})` : "") + ":", info.summary] : [], fields.length ? ["", "Details:"].concat(fields) : [],
+    info.mood ? [`Mood: ${info.mood.label}${info.mood.note ? " (" + info.mood.note + ")" : ""}`] : [],
+    pt ? ["", `${cap(WORDS.client)}: ${pt.name}${pt.age ? ", " + pt.age : ""}, ${pt.phone}`].concat((pt.appts || []).filter(a => a.status === "done" || (a.status === "booked" && a.at < Date.now())).slice(-3).map(a => `Earlier ${WORDS.visit}: ${when(a.at)}, ${a.reason || ""}`)) : [],
+    info.deskNotes.length ? ["", "Front desk notes:"].concat(info.deskNotes.map(n => `- ${n.text}${n.by ? " (" + n.by + ")" : ""}`)) : []);
+  if (level === 1) return head.concat(mid).join("\n").slice(0, 1800);
+  const talk = info.transcript.length ? ["", "Conversation:"].concat(info.transcript.map(x => `${x.who === "caller" ? "Caller" : cfg("assistantName")}: ${x.t}`)) : [];
+  return head.concat(mid, talk).join("\n").slice(0, 8000);
+}
 // Books at the engine first; Frontly keeps its copy only when that worked
-async function bookAtEngine(c, pt, doc, at, why) {
+async function bookAtEngine(c, pt, doc, at, why, info) {
   const id = plannerId(), P = PLANNERS[id], ext = doc.ext && doc.ext[id];
   if (!ext) throw new Error(`${doc.short} isn't linked to ${P.label} yet: Settings › Planning › ${P.label}`);
   const len = cfg("slotMinutes") * 60e3;   // each booking lasts the appointment length; the engine's step only spaces the times
@@ -1388,10 +1418,16 @@ async function bookAtEngine(c, pt, doc, at, why) {
   if (!sh) throw new Error(`That time is no longer in ${doc.short}'s shift in ${P.label}`);
   if (((extDiary.busy || {})[doc.id] || []).some(x => at < x.end && at + len > x.start)) throw new Error(`That time was just taken in ${P.label}. Pick another one`);
   const cl = { name: (pt && pt.name) || c.fields.name || "Caller", phone: (pt && pt.phone) || c.phone, ref: pt && pt.ext && pt.ext[id] };
-  const note = [plannerCfg(id).note, why].filter(Boolean).join(": ");
-  const r = await P.book({ staff: ext, start: at, end: at + len, room: sh.room || plannerCfg(id).room || "", client: cl, note });
+  // the whole story as the visit's note; if the engine refuses it (too long, perhaps), a shorter one, then the short line
+  const lead = [plannerCfg(id).note, why].filter(Boolean).join(": "), x = { staff: ext, start: at, end: at + len, room: sh.room || plannerCfg(id).room || "", client: cl };
+  let r, sent = 0, lastErr;
+  for (const level of [0, 1, 2]) {
+    try { r = await P.book(Object.assign({}, x, { note: lead + "\n\n" + bookingNote(info, pt, level) })); sent = level; break; }
+    catch (e) { lastErr = e; if (/busy|taken|occupied|shift|refused the API key|didn't answer/i.test(String(e.message || e))) break; }
+  }
+  if (!r) throw lastErr;
   await loadDiary(at, at, true);
-  return Object.assign({ planner: id }, r);
+  return Object.assign({ planner: id, note: ["full", "shorter", "short"][sent] }, r);
 }
 
 // ---------- import ----------
@@ -1510,7 +1546,7 @@ function clientState() {
   return {
     patients, calls: calls.slice(0, 200),
     planner: { id: plannerId(), label: planner().label, can: planner().can },
-    planners: Object.entries(PLANNERS).map(([id, P]) => ({ id, label: P.label, about: P.about, help: P.help || "", docs: P.docs || "", builtin: !!P.builtin, can: P.can, secret: P.secret || "",
+    planners: Object.entries(PLANNERS).map(([id, P]) => ({ id, label: P.label, cancels: !!P.cancel || !!P.builtin, about: P.about, help: P.help || "", docs: P.docs || "", builtin: !!P.builtin, can: P.can, secret: P.secret || "",
       fields: (P.fields || []).map(({ k, label, type, list, help, def }) => ({ k, label, type, list, help, def })), clients: !!P.clients, inspect: !!P.inspect, cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
     ext: extDiary && extDiary.id === plannerId() ? extDiary : null,
     importing: importView(pendingImport),
@@ -1668,9 +1704,16 @@ async function handle(m) {
     }
     case "appt-cancel": {
       const pt = patients.find(p => p.id === m.patient), a = pt && (pt.appts || []).find(x => x.id === m.appt), there = a && a.ext && PLANNERS[a.ext.planner];
+      if (!a || a.status !== "booked") return call("__done", m.req, false, "That visit isn't booked any more");
+      if (there && there.cancel) {   // cancelled there first; if that fails, nothing changes here
+        try { await there.cancel({ ref: a.ext.ref, reason: m.reason || "" }); }
+        catch (e) { return call("__done", m.req, false, `${there.label}: ${String(e.message || e).slice(0, 140)}. Nothing was cancelled.`); }
+      }
       cancelAppt(m); saveWidget(widgetSnapshot()); saveAll();
-      toast(there && !there.can.cancel ? `Cancelled in Frontly. Cancel it in ${there.label} too: Frontly can't do that through its API yet` : "Appointment cancelled");
-      return push();
+      toast(there && !there.cancel ? `Cancelled in Frontly. Cancel it in ${there.label} too: Frontly can't do that through its API yet` : there ? `Cancelled in Frontly and ${there.label}` : "Visit cancelled");
+      push();
+      if (lineOn()) lineReq("PUT", "/patients", patientsBrief()).catch(e => startLog("phone line: " + String(e.message || e).slice(0, 100)));
+      return call("__done", m.req, true, "");
     }
     // Settings › Planning: which engine, and each engine's own window
     case "planner-use": {
@@ -2972,7 +3015,7 @@ function clientApp() {
       const appt = (pt.appts || []).find(a => a.callId === c.id && a.status === "booked");
       if (c.booking.movedTo) return `<div class="booked closed"><b>Moved to ${esc(dayLabel(c.booking.movedTo))}, ${hhmm(c.booking.movedTo)}</b><span class="muted">Was ${esc(dayLabel(c.booking.at))}, ${hhmm(c.booking.at)} with ${esc(d.short || "")}. A later call moved it.</span></div>`;
       return `<div class="booked"><b>✓ ${c.booking.movedFrom ? "Moved to" : "Booked:"} ${esc(dayLabel(c.booking.at))}, ${hhmm(c.booking.at)}</b><span>${esc(d.name || "")} · ${esc(d.role || "")}</span><small class="muted">${c.booking.movedFrom ? `was ${esc(dayLabel(c.booking.movedFrom))}, ${hhmm(c.booking.movedFrom)} · ` : ""}by ${esc(c.booking.by || "")}</small>
-        <div class="aic-btns"><button class="sm" data-act="copyconf" data-id="${esc(c.id)}">Copy confirmation text</button>${appt ? `<button class="sm danger ${caseArmed === "cancel" ? "armed" : ""}" data-act="apptcancel" data-p="${esc(pt.id)}" data-v="${esc(appt.id)}">${caseArmed === "cancel" ? "Confirm" : "Cancel appointment"}</button>` : ""}</div></div>`;
+        <div class="aic-btns"><button class="sm" data-act="copyconf" data-id="${esc(c.id)}">Copy confirmation text</button>${appt ? `<button class="sm danger" data-act="apptcancel" data-p="${esc(pt.id)}" data-v="${esc(appt.id)}">Cancel the visit</button>` : ""}</div></div>`;
     }
     if (c.status === "noted") {
       const w = c.followUp && byCall(c.followUp);
@@ -3279,6 +3322,40 @@ function clientApp() {
       ${patErr ? `<p class="err">${esc(patErr)}</p>` : ""}
       <div class="aic-btns"><button class="sm primary" data-act="patsave" data-id="${esc(p.id)}">Save</button><button class="sm" data-act="patcancel">Cancel</button><button class="sm danger ${patArmed === "rm:" + p.id ? "armed" : ""}" data-act="patremove" data-id="${esc(p.id)}">${patArmed === "rm:" + p.id ? "Confirm" : "Remove " + esc(word("client"))}</button></div></div>`;
   }
+  // What went with a visit when it was booked (a.info): the note, the details, the conversation
+  let apptOpen = "", apptTx = "";
+  function apptInfoHTML(a) {
+    const I = a.info || {}, L = S.fieldLabels || {}, P = a.ext && (S.planners || []).find(x => x.id === a.ext.planner);
+    const rows = Object.entries(I.fields || {}).filter(([k]) => k !== "name").map(([k, v]) => [L[k] || k, k === "pain" ? v + "/10" : k === "urgency" ? v + "/5" : v]);
+    const src = I.source === "phone" ? "📞 Real phone call" : I.source === "desk" ? "✎ Front desk" : "Call in Frontly";
+    return `<div class="ainfo">
+      <p class="muted">${esc(src)}, ${esc(whenFull(I.callAt || a.made))} · booked by ${esc(I.by || a.by || "")} ${esc(dayLabel(I.at || a.made))}${P ? ` · sent to ${esc(P.label)} with ${a.ext.note === "full" ? "the whole story" : a.ext.note === "shorter" ? "a shorter note" : "a short note"}` : ""}</p>
+      ${I.summary ? `<p class="ai-s">${I.noteBy && I.noteBy !== "desk" && I.noteBy !== "template" ? "✦ " : ""}${esc(I.summary)}</p>` : ""}
+      <div class="chips">${I.triage ? triagePill(I.triage) : ""}${I.priority ? `<span class="pill">Priority ${esc(I.priority)}/5</span>` : ""}${I.service ? `<span class="pill">${esc(I.service)}</span>` : ""}${(I.flags || []).map(f => `<span class="pill flag">⚠ ${esc(f)}</span>`).join("")}</div>
+      ${rows.length ? `<dl class="facts">${rows.map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join("")}${I.mood ? `<div><dt>Mood</dt><dd>${S.moods[I.mood.label] || ""} ${esc(I.mood.label)}</dd></div>` : ""}</dl>` : ""}
+      ${(I.deskNotes || []).length ? `<ul class="notes">${I.deskNotes.map(n => `<li><p>${esc(n.text)}</p><small class="muted">${esc(n.by || "")}</small></li>`).join("")}</ul>` : ""}
+      ${(I.transcript || []).length ? `<button class="link small" data-act="appttx" data-v="${esc(a.id)}">${apptTx === a.id ? "Hide the conversation" : `Read the conversation (${I.transcript.length})`}</button>${apptTx === a.id ? `<div class="c-log flat">${I.transcript.map(l => `<p class="bub ${l.who}">${esc(l.t)}</p>`).join("")}</div>` : ""}` : ""}
+    </div>`;
+  }
+  // Cancelling a visit: a dialog to confirm, with an optional reason
+  let dlg = null;
+  function renderDlg() {
+    const el = $("#dlg");
+    if (!dlg) { el.classList.remove("open"); el.innerHTML = ""; lockBody(); return; }
+    const pt = byPatient(dlg.patient), a = pt && (pt.appts || []).find(x => x.id === dlg.appt);
+    if (!a) { dlg = null; renderDlg(); return; }
+    const d = docOf(a.doctor) || {}, P = a.ext && (S.planners || []).find(x => x.id === a.ext.planner);
+    el.classList.add("open"); lockBody();
+    el.innerHTML = `<div class="dlg-card" role="dialog" aria-modal="true" aria-labelledby="dlg-t">
+      <h2 id="dlg-t">Cancel this ${esc(word("visit"))}?</h2>
+      <p class="dlg-what"><b>${esc(pt.name)}</b><span>${esc(new Date(a.at).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }))}, ${hhmm(a.at)}</span><span class="muted">${esc(d.name || "")}${a.reason ? " · " + esc(a.reason) : ""}</span></p>
+      ${P ? (P.cancels ? `<p class="note">It's cancelled in ${esc(P.label)} too.</p>` : `<p class="note rule-n">Frontly can't cancel it in ${esc(P.label)}: its API has no way to yet. Cancel it there as well after this.</p>`) : ""}
+      <label class="lbl-s" for="dlg-why">Why <span class="muted">(optional)</span></label>
+      <input id="dlg-why" class="cfgin wide" placeholder="Asked to cancel, feeling better, booked elsewhere…" autocomplete="off" value="${esc(dlg.why || "")}">
+      ${dlg.err ? `<p class="err">${esc(dlg.err)}</p>` : ""}
+      <div class="dlg-btns"><button class="sm" data-act="dlgkeep">Keep it</button><button class="dlg-go" data-act="dlgcancel" ${dlg.busy ? "disabled" : ""}>${dlg.busy ? "Cancelling…" : `Cancel ${esc(word("visit"))}`}</button></div>
+    </div>`;
+  }
   function renderPat() {
     const el = $("#patsheet"), keep = el.scrollTop, p = patId && byPatient(patId);
     el.classList.toggle("open", !!p); lockBody();
@@ -3290,7 +3367,7 @@ function clientApp() {
       ${patEdit === p.id ? patForm(p) : `<dl class="facts"><div><dt>Phone</dt><dd>${esc(p.phone)}</dd></div>${p.age ? `<div><dt>Age</dt><dd>${esc(p.age)}</dd></div>` : ""}<div><dt>${esc(word("Client"))} since</dt><dd>${esc(new Date(p.since).toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</dd></div></dl>
       <div class="pe-row"><button class="dbb" data-act="patedit" data-id="${esc(p.id)}">${EDIT_SVG}<span>Edit details</span></button><button class="dbb accent" data-act="regopen" data-v="${esc(p.id)}">${PLUS_SVG}<span>New request</span></button></div>`}
       <h3 class="sec2">Coming up</h3>
-      ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || "")}</small></div><button class="sm danger ${patArmed === a.id ? "armed" : ""}" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">${patArmed === a.id ? "Confirm" : "Cancel"}</button></div>`).join("") : `<p class="muted">Nothing booked.</p>`}
+      ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || "")}${a.ext ? ` · ${esc(((S.planners || []).find(x => x.id === a.ext.planner) || {}).label || "")}` : ""}</small></div>${a.info ? `<button class="sm" data-act="apptinfo" data-v="${esc(a.id)}" aria-expanded="${apptOpen === a.id}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}<button class="sm danger" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">Cancel</button></div>${apptOpen === a.id ? apptInfoHTML(a) : ""}`).join("") : `<p class="muted">Nothing booked.</p>`}
       <h3 class="sec2">Message for ${esc(p.name.split(" ")[0])}</h3>
       ${p.message ? `<div class="appt msg"><div class="grow"><b>“${esc(p.message.text)}”</b><small>${esc(S.assistant)} passes it on at the next call · ${esc(p.message.by)}, ${esc(dayLabel(p.message.at))}</small></div><button class="sm" data-act="patmsgclear" data-id="${esc(p.id)}">Remove</button></div>`
         : `<p class="muted">${esc(S.assistant)} passes a message on when ${esc(p.name.split(" ")[0])} next phones.</p><textarea id="patmsg" class="cfgin wide" rows="2" placeholder="For example: please bring your X-rays on Friday"></textarea><button class="sm" data-act="patmsg" data-id="${esc(p.id)}">Save message</button>`}
@@ -3298,7 +3375,7 @@ function clientApp() {
       <h3 class="sec2">Calls</h3>
       ${cl.length ? cl.map(c => `<button class="crow" data-act="opencase" data-id="${esc(c.id)}"><span class="stripe tri-${esc((c.summary || {}).triage || "routine")}"></span><span class="grow"><b>${esc((c.summary || {}).reason || "Call")}</b><small>${esc(whenFull(c.at))}${INTENT_L[c.intent] ? " · " + INTENT_L[c.intent] : c.followUp ? " · called again" : ""}${c.mood ? " · " + (S.moods[c.mood.label] || "") + " " + esc(c.mood.label) : ""}</small></span>${statusPill(c)}</button>`).join("") : `<p class="muted">No calls yet.</p>`}
       <h3 class="sec2">${esc(word("Visits"))}</h3>
-      ${past.length ? `<ul class="hist">${past.map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">No ${esc(word("visits"))} yet.</p>`}
+      ${past.length ? `<ul class="hist">${past.map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}${a.cancelled ? `<small class="muted cx">Cancelled${a.cancelled.by ? " by " + esc(a.cancelled.by) : ""}, ${esc(dayLabel(a.cancelled.at))}${a.cancelled.reason ? ": " + esc(a.cancelled.reason) : ""}</small>` : ""}${a.info ? ` <button class="link small" data-act="apptinfo" data-v="${esc(a.id)}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}${apptOpen === a.id ? apptInfoHTML(a) : ""}</li>`).join("")}</ul>` : `<p class="muted">No ${esc(word("visits"))} yet.</p>`}
       <h3 class="sec2">Notes</h3>
       ${(p.notes || []).length ? `<ul class="notes">${p.notes.map(n => `<li><p>${esc(n.text)}</p><small class="muted">${esc(n.by)} · ${esc(dayLabel(n.at))}</small></li>`).join("")}</ul>` : `<p class="muted">No notes yet.</p>`}
       <textarea id="patnote" class="cfgin wide" rows="3" placeholder="Add a note to ${esc(p.name.split(" ")[0])}'s record"></textarea>
@@ -3306,7 +3383,7 @@ function clientApp() {
     </div>`;
     el.scrollTop = keep;
   }
-  const lockBody = () => document.body.classList.toggle("locked", !!(cfgOpen || aiOpen || K.on || caseId || patId));
+  const lockBody = () => document.body.classList.toggle("locked", !!(cfgOpen || aiOpen || K.on || caseId || patId || (typeof dlg !== "undefined" && dlg)));
 
   // ---- bridge ← Scriptable ----
   // A redraw must never lose what's being typed. Fields the user edited are marked (data-dirty); keep() redraws a
@@ -3314,7 +3391,7 @@ function clientApp() {
   // saved (a change that sends it), so a value the app corrected isn't overwritten. Only for a container that was open
   // before and after: a form opened afresh starts clean.
   const fieldKey = x => x.id ? "#" + x.id : x.dataset.k ? (x.className.match(/\b(wordin|plancfg|cfgin)\b/) || [""])[0] + ":" + x.dataset.k : x.dataset.staff ? "staff:" + x.dataset.staff : "";
-  const shown = el => !!el && (el.id === "list" || el.classList.contains("open"));
+  const shown = el => !!el && (el.id === "list" || el.classList.contains("open"));   // #dlg too: "open" while it shows
   function keep(el, draw) {
     if (!el || !shown(el)) { draw(); return; }
     const vals = {}, act = document.activeElement, inside = act && el.contains(act) && /^(INPUT|TEXTAREA|SELECT)$/.test(act.tagName);
@@ -3336,7 +3413,7 @@ function clientApp() {
     if (patId && !byPatient(patId)) patId = "";
     if (tab !== "patients" || document.activeElement !== $("#pq")) keep($("#list"), render); else renderChrome();
     keep($("#casesheet"), renderCase); keep($("#patsheet"), renderPat); keep($("#aisheet"), renderAI); keep($("#cfgsheet"), renderCfg);
-    keep($("#plansheet"), renderPlan); keep($("#impsheet"), renderImp); keep($("#regsheet"), renderReg);
+    keep($("#plansheet"), renderPlan); keep($("#impsheet"), renderImp); keep($("#regsheet"), renderReg); if (dlg) keep($("#dlg"), renderDlg);
   };
   function signIn() {
     const who = ($("#dwho") || {}).value, pin = ($("#dpin") || {}).value;
@@ -3416,17 +3493,17 @@ function clientApp() {
         break;
       case "reopen": send("desk-reopen", { id }); break;
       case "copyconf": { const c = byCall(id); if (c && c.booking) send("copy", { text: confText(c) }); break; }
-      case "apptcancel": {
-        const inCase = !!t.closest("#casesheet"), key = inCase ? "cancel" : v;
-        const armedNow = inCase ? caseArmed === "cancel" : patArmed === v;
-        if (armedNow) { caseArmed = ""; patArmed = ""; send("appt-cancel", { patient: t.dataset.p, appt: v }); }
-        else {
-          if (inCase) caseArmed = "cancel"; else patArmed = v;
-          inCase ? renderCase() : renderPat();
-          setTimeout(() => { if (inCase && caseArmed === key) { caseArmed = ""; renderCase(); } if (!inCase && patArmed === key) { patArmed = ""; renderPat(); } }, 3500);
-        }
+      case "apptcancel": dlg = { patient: t.dataset.p, appt: v, why: "", err: "", busy: false }; renderDlg(); setTimeout(() => { const f = $("#dlg-why"); if (f) f.focus(); }, 80); break;
+      case "dlgkeep": dlg = null; renderDlg(); break;
+      case "dlgcancel": {
+        if (!dlg || dlg.busy) break;
+        dlg.why = ($("#dlg-why") || {}).value || ""; dlg.busy = true; dlg.err = ""; renderDlg();
+        const d0 = dlg;
+        send("appt-cancel", { patient: d0.patient, appt: d0.appt, reason: d0.why }, (ok, msg) => { if (ok) dlg = null; else { d0.busy = false; d0.err = msg || "Couldn't cancel"; } renderDlg(); });
         break;
       }
+      case "apptinfo": apptOpen = apptOpen === v ? "" : v; apptTx = ""; renderPat(); break;
+      case "appttx": apptTx = apptTx === v ? "" : v; renderPat(); break;
       case "addnote": { const ta = $("#casenote"), c = byCall(id); if (ta && ta.value.trim() && c) { send("note", { call: id, patient: c.patientId, text: ta.value }); ta.value = ""; } break; }
       case "openpat": patId = id; patArmed = ""; patEdit = ""; patErr = ""; patDraft = null; renderPat(); $("#patsheet").scrollTop = 0; break;
       case "patclose": patId = ""; patEdit = ""; patErr = ""; patDraft = null; renderPat(); break;
@@ -3825,6 +3902,19 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 #plansheet{z-index:13}
 #impsheet{z-index:14}
 #regsheet{z-index:12}
+.dlg{position:fixed;inset:0;z-index:40;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.45);padding:16px 12px calc(16px + env(safe-area-inset-bottom,0px))}
+.dlg.open{display:flex}
+.dlg-card{width:100%;max-width:460px;background:var(--paper);border:1px solid var(--rule);border-radius:22px;padding:18px 18px 14px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.dlg-card h2{margin:0 0 10px;font-size:calc(21px * var(--ts))}
+.dlg-what{display:flex;flex-direction:column;gap:2px;margin:0 0 10px;font-size:calc(15.5px * var(--ts))}
+.dlg-btns{display:grid;grid-template-columns:1fr 1.4fr;gap:10px;margin-top:12px}
+.dlg-btns .sm{height:48px;border-radius:14px;font-size:calc(15.5px * var(--ts));font-weight:650;display:flex;align-items:center;justify-content:center;text-align:center}
+.dlg-go{height:48px;border-radius:14px;border:0;background:var(--danger);color:var(--paper);font:inherit;font-weight:700;font-size:calc(15.5px * var(--ts));display:flex;align-items:center;justify-content:center;text-align:center}
+.dlg-go[disabled]{opacity:.6}
+.ainfo{grid-column:1/-1;background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:10px 12px;margin:-4px 0 10px;display:flex;flex-direction:column;gap:8px}
+.ainfo .facts{margin:0}
+.ainfo .ai-s{margin:0;font-size:calc(15px * var(--ts))}
+.cx{display:block}
 .srch-row{display:flex;gap:8px;align-items:center}
 .srch-row .search{flex:1;min-width:0}
 .pe-row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 2px}
@@ -4228,6 +4318,7 @@ const buildHTML = () => `<!doctype html><html lang="en" data-theme="${initTheme}
 <div id="impsheet" class="sheet" aria-label="Import"></div>
 <div id="regsheet" class="sheet" aria-label="Register"></div>
 <div id="bpabout" aria-hidden="true"></div>
+<div id="dlg" class="dlg"></div>
 <div id="toast" role="status"></div>
 <script>
 // Launch screen (app-blueprints · launch-screen 1.0.2): first, self-contained

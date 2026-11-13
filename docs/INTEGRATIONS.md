@@ -31,6 +31,8 @@ What Frontly calls (as the open-source [4WP Booking](https://github.com/4wpdev/4
 
 Frontly asks for the diary a week at a time and reads replies given as a list, under a key, or grouped by date. If a linked person shows no times, **Check the diary** in the ClinicCards window lists what one week's shifts contain: how many, whose (ClinicCards id and name), whether each person is linked in Frontly, and the fields a shift has. No shifts at all means the ClinicCards schedule has none for that week; shifts under an unlinked id mean the link is to the wrong person.
 
+Each visit's `note` carries everything Frontly knows: who booked it and how the request came in, the reason, triage, service and warnings, the AI summary, every detail collected, the mood, the front-desk notes, earlier visits and the whole conversation (up to 8,000 characters). If ClinicCards refuses it, Frontly tries a shorter note without the conversation, then the short line. Cancelling: ClinicCards' published API shows no call to cancel or change a visit, so Frontly cancels its own copy and tells you to cancel it in ClinicCards too. An engine that can cancel gets a `cancel({ ref, reason })` function; the dialog then says it cancels there too.
+
 Before booking, Frontly reads that day's diary again, so a time taken in ClinicCards a moment ago isn't booked twice. Times are the clinic's local time; the phone running Frontly should be in the same time zone. Each booking sends the caller's name and phone number to ClinicCards.
 
 ## Adding another engine

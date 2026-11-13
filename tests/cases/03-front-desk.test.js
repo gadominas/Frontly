@@ -36,10 +36,10 @@ scenario('front desk books and cancels', async (t) => {
   await app.until(() => app.log.copied.length, 2000, 'the confirmation text');
   t.check(/Hi Greta, this is Northlight Dental/.test(app.log.copied[0]), 'the confirmation text greets Greta');
 
-  t.step('C. Cancelling takes two taps and puts the call back');
+  t.step('C. Cancelling asks first and puts the call back');
   app.tap('#casesheet [data-act="apptcancel"]');
-  await app.until(() => /Confirm/.test(app.text('#casesheet [data-act="apptcancel"]')), 2000, 'Confirm');
-  app.tap('#casesheet [data-act="apptcancel"]');
+  await app.until(() => app.$('#dlg.open [data-act="dlgcancel"]'), 2000, 'the confirmation dialog');
+  app.tap('#dlg [data-act="dlgcancel"]');
   await app.until(() => ((app.json(app.path('calls.json')) || [])[0] || {}).status === 'waiting', 3000, 'the call waits again');
   t.check(true, 'the call waits again');
   await t.close(app);
