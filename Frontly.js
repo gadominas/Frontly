@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.8.1';
+const VERSION = '1.8.2';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -2771,7 +2771,9 @@ function clientApp() {
   }
 
   // The case: one call, as the receptionist sees it, with booking
-  let caseId = "", caseDoc = "", caseDay = 0, caseSlot = 0, caseArmed = "", caseBusy = false, showTx = false, caseMove = "", caseSug = null;
+  let caseId = "", caseDoc = "", caseDay = 0, caseSlot = 0, caseArmed = "", caseBusy = false, showTx = false, caseMove = "", caseSug = null, casePick = 0;
+  const ymdL = t => { const d = new Date(t), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+  const CAL_SVG = `<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
   const planBusy = {};
   const hash = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return Math.abs(h); };
   const dkey = ts => { const d = new Date(ts); return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); };
@@ -2809,7 +2811,7 @@ function clientApp() {
     for (let i = 0, d = sod(Date.now()); out.length < n && i < 60; i++, d = sod(d + DAY + 3600e3)) if (doc.days.includes(new Date(d).getDay())) out.push(d);
     return out;
   }
-  const slotTimes = (doc, day) => { if (extFor(doc)) return extTimes(doc, day); const step = (S.cfg.slotMinutes || 30) * 60e3, out = []; for (let t = day + doc.from * 3600e3; t + step <= day + doc.to * 3600e3; t += step) out.push(t); return out; };
+  const slotTimes = (doc, day) => { if (extFor(doc)) return extTimes(doc, day); if (extOn() || !doc.days.includes(new Date(day).getDay())) return [];   /* an engine's unlinked person, or a day off */ const step = (S.cfg.slotMinutes || 30) * 60e3, out = []; for (let t = day + doc.from * 3600e3; t + step <= day + doc.to * 3600e3; t += step) out.push(t); return out; };
   // rule(t): why this patient can't have that time (the booking rules), or ""
   function slotsFor(doc, day, rule) {
     const taken = bookedAt(doc.id);
@@ -2892,7 +2894,7 @@ function clientApp() {
   function openCase(id) {
     const c = byCall(id); if (!c) return;
     if (!S.settings.deskUser) { tab = "desk"; render(); toast("Sign in at the front desk to open calls"); return; }
-    caseId = id; caseArmed = ""; showTx = false; caseSlot = 0; caseDay = 0;
+    caseId = id; caseArmed = ""; showTx = false; caseSlot = 0; caseDay = 0; casePick = 0;
     const up = upcomingOf(byPatient(c.patientId));
     caseMove = c.status === "waiting" && c.intent === "change_visit" && up.length ? ((c.plan && c.plan.move) || up[0].id) : "";
     caseDoc = (c.booking && c.booking.doctor) || (c.summary && c.summary.doctor) || (S.doctors[0] || {}).id || "";
@@ -2936,8 +2938,17 @@ function clientApp() {
     const days = workDays(doc);
     const extNote = !extOn() ? "" : !extFor(doc) ? `<p class="note rule-n">${esc(doc.short)} isn't linked to ${esc(S.planner.label)}, so there are no times to offer. <button class="link small" data-act="planopen" data-v="${esc(S.planner.id)}">Link in ${esc(S.planner.label)} settings</button></p>`
       : S.ext && S.ext.err ? `<p class="note err">${esc(S.planner.label)}: ${esc(S.ext.err)}</p>` : !S.ext ? `<p class="note">Loading ${esc(S.planner.label)}'s diary…</p>` : `<p class="note">Times from ${esc(S.planner.label)}; the booking goes there.</p>`;
+    if (casePick && !days.includes(casePick)) { days.push(casePick); days.sort((a, b) => a - b); }   // a date picked with Pick a date stays in the strip
     if (!caseDay || !days.includes(caseDay)) { caseDay = (days.find(d => slotsFor(doc, d, rule).some(usable)) || days[0] || 0); caseSlot = 0; }
     const sl = caseDay ? slotsFor(doc, caseDay, rule) : [];
+    const loaded = d => !extFor(doc) || (S.ext && S.ext.from <= d && S.ext.to >= d + DAY - 1);
+    const dname = d => new Date(d).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+    // why a day has no times, in words
+    const why = !caseDay ? (extFor(doc) ? `No shifts for ${esc(doc.short)} in ${esc(S.planner.label)} in the coming days. Pick a date further ahead.` : extOn() ? "" : `${esc(doc.short)} has no working days set. Add them in Settings › ${esc(word("Staffs"))}.`)
+      : !loaded(caseDay) ? `Loading ${esc(S.planner.label)} for ${esc(dname(caseDay))}…`
+      : sl.length ? "" : extFor(doc) ? `${esc(doc.short)} has no shift in ${esc(S.planner.label)} on ${esc(dname(caseDay))}.`
+      : !doc.days.includes(new Date(caseDay).getDay()) ? `${esc(doc.short)} doesn't work on ${esc(new Date(caseDay).toLocaleDateString(undefined, { weekday: "long" }))}s.`
+      : sod(caseDay) === sod(Date.now()) ? "No times left today." : "No times on this day.";
     const docs = S.doctors.slice().sort((a, b) => (b.id === s.doctor) - (a.id === s.doctor) || (b.spec.includes(s.specialty)) - (a.spec.includes(s.specialty)));
     const ok = (d, at) => { const dd = docOf(d); return dd && slotsFor(dd, sod(at), ruleFor(c, caseMove, d)).some(x => x.at === at && usable(x)); };
     const tLabel = (d, at) => `${esc(dayLabel(at))}, ${hhmm(at)} with ${esc((docOf(d) || {}).short || "")}`;
@@ -2953,12 +2964,13 @@ function clientApp() {
           ${pl.alts.length ? `<span class="sug-alt">Or: ${pl.alts.map(x => ok(x.doctor, x.at) ? `<button class="link small" data-act="usetime" data-v="${esc(x.doctor)}|${x.at}">${tLabel(x.doctor, x.at)}</button>` : "").join(" ")}</span>` : ""}</p>
           ${!ok(pl.doctor, pl.at) ? `<span class="muted">No longer free</span>` : caseSlot === pl.at && caseDoc === pl.doctor ? `<span class="sug-on">✓ Selected</span>` : `<button class="sm" data-act="usetime" data-v="${esc(pl.doctor)}|${pl.at}">Use</button>`}</div>`
         : S.settings.ai && S.settings.hasKey ? `<button class="link small" data-act="planai" data-id="${esc(c.id)}" ${planBusy[c.id] ? "disabled" : ""}>${planBusy[c.id] ? "✦ Planning…" : "✦ Ask AI to plan this " + esc(word("visit"))}</button>` : ""}
-      ${s.hint ? `<p class="bk-hint">${s.kind === "ai" ? "✦ " : ""}${esc(s.hint)}</p>` : ""}
+      ${s.hint && (!s.doctor || S.doctors.some(d => d.id === s.doctor && (!extOn() || extFor(d)))) ? `<p class="bk-hint">${s.kind === "ai" ? "✦ " : ""}${esc(s.hint)}</p>` : ""}
       ${extNote}
       <label class="lbl-s" for="bkdoc">${esc(word("Staff"))}</label>
       <select id="bkdoc" class="voicesel bkdoc">${docs.map(d => `<option value="${esc(d.id)}" ${d.id === doc.id ? "selected" : ""}>${esc(d.name)} · ${esc(d.role)}${d.id === s.doctor ? " (suggested)" : ""}${extOn() && !extFor(d) ? ` (not in ${esc(S.planner.label)})` : ""}</option>`).join("")}</select>
-      <div class="days" role="tablist" aria-label="Day">${days.map(d => { const x = slotsFor(doc, d, rule), n = x.filter(usable).length, blocked = !n && x.some(y => y.free && y.why); return `<button class="day ${d === caseDay ? "on" : ""}" data-act="bkday" data-v="${d}" ${n ? "" : "disabled"}><small>${esc(new Date(d).toLocaleDateString(undefined, { weekday: "short" }))}</small><b>${new Date(d).getDate()}</b><i>${n ? n + " free" : blocked ? "not allowed" : "full"}</i></button>`; }).join("")}</div>
-      <div class="slots">${sl.length ? sl.map(x => `<button class="slot ${x.at === caseSlot ? "on" : ""} ${usable(x) && prefOk(pf, x.at) ? "pref" : ""} ${x.free && x.why ? "rule" : ""}" data-act="bkslot" data-v="${x.at}" ${usable(x) ? "" : "disabled"} ${x.why ? `title="${esc(x.why)}"` : ""}>${hhmm(x.at)}</button>`).join("") : `<p class="muted">No times left on this day.</p>`}</div>
+      <div class="days-row"><div class="days" role="tablist" aria-label="Day">${days.map(d => { const x = slotsFor(doc, d, rule), n = x.filter(usable).length, blocked = !n && x.some(y => y.free && y.why); return `<button class="day ${d === caseDay ? "on" : ""}" data-act="bkday" data-v="${d}" ${n ? "" : "disabled"}><small>${esc(new Date(d).toLocaleDateString(undefined, { weekday: "short" }))}</small><b>${new Date(d).getDate()}</b><i>${n ? n + " free" : blocked ? "not allowed" : !loaded(d) ? "…" : "full"}</i></button>`; }).join("")}</div>
+        <label class="dbb pickdate ${casePick && casePick === caseDay ? "on" : ""}" aria-label="Pick a date">${CAL_SVG}<span>${casePick && !workDays(doc).includes(casePick) ? esc(new Date(casePick).toLocaleDateString(undefined, { day: "numeric", month: "short" })) : "Pick a date"}</span><input type="date" class="bkdate" min="${ymdL(Date.now())}" value="${caseDay ? ymdL(caseDay) : ""}"></label></div>
+      <div class="slots">${sl.length ? sl.map(x => `<button class="slot ${x.at === caseSlot ? "on" : ""} ${usable(x) && prefOk(pf, x.at) ? "pref" : ""} ${x.free && x.why ? "rule" : ""}" data-act="bkslot" data-v="${x.at}" ${usable(x) ? "" : "disabled"} ${x.why ? `title="${esc(x.why)}"` : ""}>${hhmm(x.at)}</button>`).join("") : `<p class="muted slots-none">${why || "No times on this day."}</p>`}</div>
       ${pf.any ? `<p class="note"><span class="pref-dot"></span> Matches what the caller asked for</p>` : ""}
       ${reasons.length ? `<p class="note rule-n">Not offered: ${reasons.map(esc).join(" · ")}</p>` : ""}
       <button class="primary block" data-act="book" ${caseSlot && !caseBusy ? "" : "disabled"}>${caseBusy ? "Booking…" : caseSlot ? `${mv ? "Move to" : "Book"} ${esc(dayLabel(caseSlot))}, ${hhmm(caseSlot)} with ${esc(doc.short)}` : "Pick a time"}</button>
@@ -3512,7 +3524,18 @@ function clientApp() {
     if (c.contains("plancfg")) { send("planner-cfg", { id: planId, k: e.target.dataset.k, v: e.target.value }); return; }
     if (c.contains("planlink")) { send("planner-link", { id: planId, staff: e.target.dataset.staff, ext: e.target.value }); return; }
     if (c.contains("wordin")) { send("words", { k: e.target.dataset.k, v: e.target.value }); return; }
-    if (c.contains("bkdoc")) { caseDoc = e.target.value; caseDay = 0; caseSlot = 0; renderCase(); return; }
+    if (c.contains("bkdoc")) { caseDoc = e.target.value; caseDay = casePick || 0; caseSlot = 0; renderCase(); return; }
+    if (c.contains("bkdate")) {   // Pick a date: any day from today on; the engine's diary for that week is fetched
+      const m = String(e.target.value || "").match(/^(\d{4})-(\d\d)-(\d\d)$/);
+      if (!m) return;
+      const d = new Date(+m[1], m[2] - 1, +m[3]).getTime();
+      if (d < sod(Date.now())) return;
+      casePick = d; caseDay = d; caseSlot = 0;
+      if (extOn()) needDiary(d, d + 6 * DAY);
+      renderCase();
+      const on = $("#casesheet .day.on"); if (on && on.scrollIntoView) on.scrollIntoView({ inline: "center", block: "nearest" });   // the picked day in view
+      return;
+    }
     if (c.contains("bkmove")) { caseMove = e.target.value; const cc = byCall(caseId); caseSug = cc ? suggest(cc, caseMove) : null; if (caseSug) useTime(caseSug.doctor, caseSug.at); else { caseDay = 0; caseSlot = 0; } renderCase(); return; }
     if (c.contains("modelsel")) send("aimodel", { p: e.target.dataset.p, v: e.target.value });
     if (c.contains("linein")) { send("set", { k: "bridgeUrl", v: e.target.value }); return; }
@@ -3782,6 +3805,12 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .day.on small,.day.on i{color:inherit;opacity:.8}
 .day[disabled]{opacity:.4}
 .slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(74px,1fr));gap:8px;margin-top:12px}
+.slots-none{grid-column:1/-1;margin:4px 0}
+.days-row{display:flex;align-items:stretch;gap:8px;margin-top:12px}
+.days-row .days{flex:1;min-width:0;margin:0 0 0 -14px;padding:2px 4px 4px 14px}
+.pickdate{position:relative;flex:none;flex-direction:column;justify-content:center;height:auto;min-height:62px;border-radius:12px;padding:6px 10px;font-size:calc(12.5px * var(--ts));text-align:center;white-space:normal;max-width:84px}
+.pickdate.on{border-color:var(--signal);color:var(--signal)}
+.pickdate input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;-webkit-appearance:none;appearance:none;border:0}
 .slot{padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--rule);background:var(--paper);font:650 calc(15px * var(--ts))/1 var(--rounded);font-variant-numeric:tabular-nums;position:relative}
 .slot[disabled]{opacity:.35;text-decoration:line-through}
 .slot.pref::after,.pref-dot{content:"";position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:3px;background:var(--signal)}
