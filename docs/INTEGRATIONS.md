@@ -26,13 +26,14 @@ What Frontly calls (as the open-source [4WP Booking](https://github.com/4wpdev/4
 | `GET schedule-shifts?from&to` | Working hours (`shift_start`, `shift_end`, local time, `schedule_cabinets_id`) |
 | `GET visits?from&to`, `GET schedule-spaces?from&to` | Time already taken or blocked |
 | `GET patients?phone=<digits>`, `POST patients` | Find the caller by number in full digits (37061234567), or create them |
+| `GET patients?page=N` | Import patients: page by page until a page brings nobody new |
 | `POST visits` | `{ status: "BOOKING", patient_id, doctor_id, cabinet_id, date, time_start, time_end, note }` |
 
 Before booking, Frontly reads that day's diary again, so a time taken in ClinicCards a moment ago isn't booked twice. Times are the clinic's local time; the phone running Frontly should be in the same time zone. Each booking sends the caller's name and phone number to ClinicCards.
 
 ## Adding another engine
 
-An engine is one entry in `PLANNERS` in `Frontly.js`, plus its secret in `SECRETS`. Frontly draws its settings window from the entry and calls four functions:
+An engine is one entry in `PLANNERS` in `Frontly.js`, plus its secret in `SECRETS`. Frontly draws its settings window from the entry and calls four functions, and a fifth, `clients()`, if the engine offers it (Import patients):
 
 ```js
 PLANNERS.myengine = {
@@ -44,6 +45,7 @@ PLANNERS.myengine = {
   async staff() { return [{ id, name, role }]; },
   async diary(from, to) { return { shifts: [{ staff, start, end, room }], busy: [{ staff, start, end }], step: 30 }; },   // times in ms, local
   async book({ staff, start, end, room, client: { name, phone, ref }, note }) { return { ref: "their booking id", client: "their client id" }; },
+  async clients() { return [{ id, name, phone, birth }]; },   // optional: Import patients
 };
 ```
 

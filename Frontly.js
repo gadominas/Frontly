@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -1201,6 +1201,7 @@ async function aiPlan(m) {
 //   diary(from, to)   their working hours and taken time, local times in ms:
 //                     { shifts: [{ staff, start, end, room }], busy: [{ staff, start, end }], step: minutes|0 }
 //   book(x)           books { staff, start, end, room, client: { name, phone, ref }, note } there: { ref, client }
+//   clients()         optional: everyone on record there, [{ id, name, phone, birth }], for Import
 // Frontly's staff are linked to the engine's people (doctor.ext[engine] = their id); times come from the engine's
 // diary, and Frontly keeps its own copy of every booking for the front desk, the calendar and the phone line.
 // To add an engine: an entry here, its secret in SECRETS, and a test in tests/cases with its API faked.
@@ -1258,6 +1259,22 @@ const PLANNERS = {
         const a = localTime(x.visit_start || x.space_start), b = localTime(x.visit_end || x.space_end), who = String(x.doctor_id || x.created_by_id || "");
         if (a < b) out.busy.push({ staff: who, start: a, end: b });   // no person: blocked for everyone
       });
+      return out;
+    },
+    // Everyone on record; page by page while new people come back (an API that ignores "page" repeats page 1: stop)
+    async clients() {
+      const out = [], seen = new Set();
+      for (let page = 1; page <= 50; page++) {
+        const rows = await this.req("GET", "patients", { page });
+        const list = Array.isArray(rows) ? rows : rows && Array.isArray(rows.patients) ? rows.patients : [];
+        let fresh = 0;
+        list.forEach(x => {
+          if (!x || !x.patient_id || seen.has(String(x.patient_id))) return;
+          seen.add(String(x.patient_id)); fresh++;
+          out.push({ id: String(x.patient_id), name: [x.firstname, x.lastname].filter(Boolean).join(" ").trim(), phone: String(x.phone || x.mobile || ""), birth: String(x.birthday || x.birth_date || x.date_of_birth || "") });
+        });
+        if (!fresh) break;
+      }
       return out;
     },
     async book(x) {
@@ -1318,14 +1335,126 @@ async function bookAtEngine(c, pt, doc, at, why) {
   return Object.assign({ planner: id }, r);
 }
 
+// ---------- import ----------
+// Clients and staff from a file or pasted rows (CSV from Excel, Numbers, Google Sheets; comma, semicolon or tab;
+// a header row names the columns, in English or Lithuanian), or from a planning engine. A preview first: what's new,
+// what's already here (clients by phone number, staff by name, "Dr." or not), what's skipped and why.
+function parseTable(text) {
+  const t = String(text || "").replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim();
+  if (!t) return [];
+  const first = t.split("\n")[0], delim = ["\t", ";", ","].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0];
+  const rows = []; let row = [], cell = "", q = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) { if (ch === '"' && t[i + 1] === '"') { cell += '"'; i++; } else if (ch === '"') q = false; else cell += ch; continue; }
+    if (ch === '"' && cell === "") q = true;
+    else if (ch === delim) { row.push(cell.trim()); cell = ""; }
+    else if (ch === "\n") { row.push(cell.trim()); rows.push(row); row = []; cell = ""; }
+    else cell += ch;
+  }
+  row.push(cell.trim()); rows.push(row);
+  return rows.filter(r => r.some(c => c !== ""));
+}
+const IMPORT_COLS = {
+  name: /^(name|full ?name|client|patient|customer|person|vardas,? pavard[eė]|pacientas|klientas)$/,
+  first: /^(first ?name|given ?name|vardas)$/, last: /^(last ?name|surname|family ?name|pavard[eė])$/,
+  phone: /^(phone|phone ?number|mobile|mob\.?|tel\.?|telephone|telefonas|tel\. nr\.?)$/, age: /^(age|am[zž]ius)$/,
+  birth: /^(birth ?date|birthday|date of birth|dob|gimimo data)$/, notes: /^(notes?|comments?|pastabos?)$/,
+  short: /^(short ?name|display ?name|trumpas vardas)$/, role: /^(role|title|position|pareigos)$/,
+  services: /^(services?|does|specialt(y|ies)|paslaugos)$/, days: /^(days|working days|darbo dienos)$/,
+  hours: /^(hours|working hours|darbo laikas)$/, from: /^(from|start|nuo)$/, to: /^(to|until|end|iki)$/,
+};
+const ageFrom = b => { const m = String(b || "").match(/(\d{4})-(\d\d)-(\d\d)|(\d\d)\.(\d\d)\.(\d{4})/); if (!m) return null; const y = +(m[1] || m[6]), mo = +(m[2] || m[5]), d = +(m[3] || m[4]), now = new Date(); let a = now.getFullYear() - y; if (now.getMonth() + 1 < mo || (now.getMonth() + 1 === mo && now.getDate() < d)) a--; return a >= 0 && a <= 120 ? a : null; };
+const DAY_NAMES = [["sun|sek|sk", 0], ["mon|pir|pr", 1], ["tue|ant|an", 2], ["wed|tre|tr", 3], ["thu|ket|kt", 4], ["fri|pen|pn", 5], ["sat|šeš|ses|št|st", 6]];
+function readDays(v) {
+  const t = String(v || "").toLowerCase().trim(); if (!t) return null;
+  const num = w => { if (/^\d$/.test(w)) return +w % 7; const hit = DAY_NAMES.find(([re]) => new RegExp("^(" + re + ")").test(w)); return hit ? hit[1] : null; };
+  const out = new Set();
+  t.split(/[,;\s]+/).filter(Boolean).forEach(part => {
+    const [a, b] = part.split(/[-–]/).map(num);
+    if (a == null) return;
+    if (b == null) { out.add(a); return; }
+    for (let d = a, i = 0; i < 7; d = (d + 1) % 7, i++) { out.add(d); if (d === b) break; }
+  });
+  return out.size ? [...out].sort() : null;
+}
+const readHours = v => { const m = String(v || "").match(/(\d{1,2})(?::\d\d)?\s*[-–]\s*(\d{1,2})(?::\d\d)?/); return m && +m[1] < +m[2] ? [+m[1], +m[2]] : null; };
+// rows → items for one kind; a first row with known names is the header, otherwise name, phone, age (clients) or name, role (staff)
+function readImport(kind, text) {
+  const rows = parseTable(text);
+  if (!rows.length) return { items: [], problems: ["Nothing to read"] };
+  const head = rows[0].map(h => h.toLowerCase().replace(/[*:]/g, "").trim());
+  const known = head.map(h => Object.keys(IMPORT_COLS).find(k => IMPORT_COLS[k].test(h)) || "");
+  const hasHead = known.filter(Boolean).length >= 1;
+  const cols = hasHead ? known : (kind === "staff" ? ["name", "role"] : ["name", "phone", "age"]);
+  const items = (hasHead ? rows.slice(1) : rows).map((r, i) => {
+    const o = { row: i + (hasHead ? 2 : 1) };
+    cols.forEach((k, j) => { if (k && r[j] != null && r[j] !== "" && o[k] == null) o[k] = r[j]; });
+    if (!o.name && (o.first || o.last)) o.name = [o.first, o.last].filter(Boolean).join(" ");
+    return o;
+  });
+  return { items, columns: cols.filter(Boolean), header: hasHead };
+}
+const normName = n => String(n || "").toLowerCase().replace(/\b(dr|doc|prof|mr|mrs|ms)\.?\s+/g, "").replace(/\s+/g, " ").trim();
+// What importing would do; nothing is changed
+function planImport(kind, items, engine) {
+  const add = [], same = [], skip = [], seen = new Set();
+  items.forEach(x => {
+    const name = String(x.name || "").trim().replace(/\s+/g, " ").slice(0, 80);
+    if (name.length < 2) { skip.push({ row: x.row, name: name || "(no name)", why: "no name" }); return; }
+    if (kind === "clients") {
+      const phone = String(x.phone || "").trim().slice(0, 30), d = digits(phone);
+      if (d.length < 6) { skip.push({ row: x.row, name, why: "no phone number: callers are recognised by it" }); return; }
+      if (seen.has(d.slice(-8))) { skip.push({ row: x.row, name, why: "the same number as a row above" }); return; }
+      seen.add(d.slice(-8));
+      const pt = patients.find(p => samePhone(p.phone, phone));
+      const age = x.age != null && /^\d{1,3}$/.test(String(x.age).trim()) && +x.age <= 120 ? +x.age : ageFrom(x.birth);
+      if (pt) same.push({ row: x.row, name, id: pt.id, ext: x.ext, age, was: pt.name });
+      else add.push({ row: x.row, name, phone, age, notes: x.notes ? String(x.notes).slice(0, 500) : "", ext: x.ext });
+    } else {
+      const k = normName(name);
+      if (seen.has(k)) { skip.push({ row: x.row, name, why: "the same name as a row above" }); return; }
+      seen.add(k);
+      const d = (settings.doctors || []).find(y => !y.archived && normName(y.name) === k);
+      if (d) { same.push({ row: x.row, name, id: d.id }); return; }
+      const svc = String(x.services || "").split(/[;,/|]+/).map(v => v.trim().toLowerCase()).filter(Boolean)
+        .map(v => Object.keys(SPECIALTIES).find(key => key === v || SPECIALTIES[key].toLowerCase() === v || SPECIALTIES[key].toLowerCase().startsWith(v))).filter(Boolean);
+      const hrs = readHours(x.hours) || (x.from && x.to && +x.from < +x.to ? [+x.from, +x.to] : null);
+      add.push({ row: x.row, name, short: String(x.short || "").trim().slice(0, 30) || name, role: String(x.role || "").trim().slice(0, 40) || cap(WORDS.staff),
+        spec: svc.length ? [...new Set(svc)] : [SPECIALTIES.general ? "general" : Object.keys(SPECIALTIES)[0]], days: readDays(x.days) || [1, 2, 3, 4, 5],
+        from: hrs ? Math.max(5, hrs[0]) : 8, to: hrs ? Math.min(23, hrs[1]) : 16, unknownSvc: !!x.services && !svc.length, ext: x.ext });
+    }
+  });
+  return { kind, engine: engine || "", add, same, skip };
+}
+// Does it: new records added; ones already here get the engine's id and a missing age, nothing else is overwritten
+function applyImport(pl) {
+  const now = Date.now();
+  if (pl.kind === "clients") {
+    pl.add.forEach((x, i) => patients.push({ id: "p-" + now.toString(36) + i, name: x.name, phone: x.phone, age: x.age == null ? null : x.age, since: now, notes: x.notes ? [{ at: now, by: settings.deskUser || "Import", text: x.notes }] : [], appts: [], ext: x.ext ? { [pl.engine]: x.ext } : undefined }));
+    pl.same.forEach(x => { const p = patients.find(y => y.id === x.id); if (!p) return; if (p.age == null && x.age != null) p.age = x.age; if (x.ext) p.ext = Object.assign({}, p.ext, { [pl.engine]: x.ext }); });
+  } else {
+    settings.doctors = settings.doctors || [];
+    pl.add.forEach((x, i) => settings.doctors.push({ id: "d-" + now.toString(36) + i, name: x.name, short: x.short, role: x.role, spec: x.spec, days: x.days, from: x.from, to: x.to, ext: x.ext ? { [pl.engine]: x.ext } : undefined }));
+    pl.same.forEach(x => { const d = settings.doctors.find(y => y.id === x.id); if (d && x.ext) d.ext = Object.assign({}, d.ext, { [pl.engine]: x.ext }); });
+    setDoctors();
+  }
+  return pl.add.length;
+}
+let pendingImport = null;   // the preview the front desk is looking at
+const importView = pl => pl && ({ kind: pl.kind, engine: pl.engine ? PLANNERS[pl.engine].label : "", add: pl.add.length, same: pl.same.length, skip: pl.skip,
+  sample: pl.add.slice(0, 6).map(x => pl.kind === "clients" ? { name: x.name, line: [x.phone, x.age != null ? x.age : ""].filter(v => v !== "").join(" · ") } : { name: x.name, line: `${x.role} · ${x.spec.map(k => SPECIALTIES[k]).join(", ")} · ${x.days.map(d => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d]).join(" ")} · ${x.from}:00–${x.to}:00` }),
+  unknownSvc: pl.add.filter(x => x.unknownSvc).length });
+
 // ---------- state sent to the UI ----------
 function clientState() {
   return {
     patients, calls: calls.slice(0, 200),
     planner: { id: plannerId(), label: planner().label, can: planner().can },
     planners: Object.entries(PLANNERS).map(([id, P]) => ({ id, label: P.label, about: P.about, help: P.help || "", docs: P.docs || "", builtin: !!P.builtin, can: P.can, secret: P.secret || "",
-      fields: (P.fields || []).map(({ k, label, type, list, help, def }) => ({ k, label, type, list, help, def })), cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
+      fields: (P.fields || []).map(({ k, label, type, list, help, def }) => ({ k, label, type, list, help, def })), clients: !!P.clients, cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
     ext: extDiary && extDiary.id === plannerId() ? extDiary : null,
+    importing: importView(pendingImport),
     doctors: DOCTORS, allDoctors: ALL_DOCTORS, specialties: SPECIALTIES, words: WORDS, business: settings.business || "dental",
     templates: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { label: t.label, words: t.words, staffName: t.staffName, staffShort: t.staffShort, staffRole: t.staffRole }])),
     ask: BIZ.ask, fieldLabels: Object.assign({}, FIELD_LABELS, BIZ.labels), customised: !!(settings.services || settings.words), staff: DESK_STAFF, demoPin: DEMO_PIN, moods: MOODS,
@@ -1496,6 +1625,40 @@ async function handle(m) {
       d.ext = Object.assign({}, d.ext); if (m.ext) d.ext[m.id] = String(m.ext); else delete d.ext[m.id];
       setDoctors(); extDiary = null; saveAll(); return push();
     }
+    case "import-check": {   // pasted rows → a preview
+      pendingImport = planImport(m.kind === "staff" ? "staff" : "clients", readImport(m.kind, m.text).items);
+      return push();
+    }
+    case "import-file": {
+      let path;
+      try { path = (await DocumentPicker.open(["public.comma-separated-values-text", "public.plain-text", "public.text"]))[0]; } catch (e) { return; }
+      if (!path) return;
+      const lfm = FileManager.local();
+      try { if (lfm.isFileStoredIniCloud && lfm.isFileStoredIniCloud(path)) await lfm.downloadFileFromiCloud(path); } catch (e) {}
+      let text = "";
+      try { text = lfm.readString(path) || ""; } catch (e) { toast("That file couldn't be read: save it as CSV and try again"); return; }
+      pendingImport = planImport(m.kind === "staff" ? "staff" : "clients", readImport(m.kind, text).items);
+      return push();
+    }
+    case "import-engine-clients": {   // a planning engine's records → a preview
+      const P = PLANNERS[m.id];
+      if (!P || !P.clients) return;
+      let list;
+      try { list = await P.clients(); } catch (e) { toast(String(e.message || e)); return; }
+      pendingImport = planImport("clients", list.map((x, i) => ({ row: i + 1, name: x.name, phone: x.phone, birth: x.birth, ext: x.id })), m.id);
+      return push();
+    }
+    case "import-commit": {
+      if (!pendingImport) return;
+      const pl = pendingImport, n = applyImport(pl);
+      pendingImport = null;
+      saveAll(); saveWidget(widgetSnapshot());
+      toast(`${n} ${pl.kind === "clients" ? (n === 1 ? WORDS.client : WORDS.clients) : (n === 1 ? WORDS.staff : WORDS.staffs)} added${pl.same.length ? `, ${pl.same.length} already here` : ""}`);
+      push();
+      if (pl.kind === "clients" && lineOn()) lineReq("PUT", "/patients", patientsBrief()).catch(e => startLog("phone line: " + String(e.message || e).slice(0, 100)));
+      return;
+    }
+    case "import-cancel": pendingImport = null; return push();
     case "planner-import": {   // everyone in the engine not yet linked becomes a staff member, linked
       const P = PLANNERS[m.id];
       if (!P || P.builtin) return;
@@ -1798,6 +1961,8 @@ function clientApp() {
       <h3 class="sec" id="planning">Planning</h3>${planningHTML()}
       <h3 class="sec">Phone line</h3>${lineHTML()}
       <h3 class="sec">Data</h3>
+      <div class="srow"><div class="grow"><b>Import ${esc(word("clients"))}</b><small class="muted wrap">From a CSV file or rows copied from a spreadsheet</small></div><button class="sm" data-act="impopen" data-v="clients">Import</button></div>
+      <div class="srow"><div class="grow"><b>Import ${esc(word("staffs"))}</b><small class="muted wrap">Names, roles, services, days and hours</small></div><button class="sm" data-act="impopen" data-v="staff">Import</button></div>
       <div class="srow"><div class="grow"><b>Remove all calls and ${word("clients")}</b><small class="muted wrap">Starts the front desk empty. ${word("Staffs")} and settings stay.</small></div><button class="sm danger ${demoArmed ? "armed" : ""}" data-act="demoreset">${demoArmed ? "Confirm" : "Remove all"}</button></div>
       <h3 class="sec">Updates</h3>
       ${S.nativeShell
@@ -1822,6 +1987,30 @@ function clientApp() {
         return `<div class="srow plan-r ${on ? "on" : ""}"><div class="grow"><b>${esc(P.label)}${on ? ` <span class="pill line">In use</span>` : ""}</b><small class="muted wrap">${esc(P.about)}${P.builtin ? "" : P.state ? (P.state.ok ? " · Connected" : " · Last test failed") : " · Not set up"}</small></div>
           ${P.builtin ? (on ? "" : `<button class="sm" data-act="planuse" data-v="builtin">Use</button>`) : `<button class="dbb" data-act="planopen" data-v="${esc(P.id)}">Settings ›</button>`}</div>`; }).join("")}`;
   }
+  // The import window: paste or pick a file, check, see what would happen, then import
+  let impKind = "";
+  function renderImp() {
+    const el = $("#impsheet"); el.classList.toggle("open", !!impKind); lockBody();
+    if (!impKind) return;
+    const I = S.importing && S.importing.kind === impKind ? S.importing : null, staff = impKind === "staff";
+    const what = staff ? word("staffs") : word("clients"), What = staff ? word("Staffs") : word("Clients");
+    el.innerHTML = `<div class="sh-head"><h2>Import ${esc(what)}</h2><button class="link" data-act="impclose">${I ? "Cancel" : "Done"}</button></div><div class="sh-body">
+      ${I ? `<p class="muted">${I.engine ? `From ${esc(I.engine)}.` : "From what you gave."} Nothing is saved until you tap Import.</p>
+        <div class="tiles"><div class="tile"><small>New</small><b>${I.add}</b><span>to add</span></div><div class="tile"><small>Already here</small><b>${I.same}</b><span>${staff ? "same name" : "same phone number"}, kept as they are</span></div></div>
+        ${I.sample.length ? `<h3 class="sec2">New</h3>${I.sample.map(x => `<div class="crow"><span class="grow"><b>${esc(x.name)}</b><small>${esc(x.line)}</small></span></div>`).join("")}${I.add > I.sample.length ? `<p class="muted">and ${I.add - I.sample.length} more</p>` : ""}` : ""}
+        ${I.unknownSvc ? `<p class="note rule-n">${I.unknownSvc} with services Frontly doesn't have: they get the first service. Add services in Settings › Business, or change them afterwards.</p>` : ""}
+        ${I.skip.length ? `<h3 class="sec2">Skipped (${I.skip.length})</h3><ul class="notes">${I.skip.slice(0, 8).map(x => `<li><p>Row ${x.row}: ${esc(x.name)}</p><small class="muted">${esc(x.why)}</small></li>`).join("")}</ul>${I.skip.length > 8 ? `<p class="muted">and ${I.skip.length - 8} more</p>` : ""}` : ""}
+        <button class="primary block" data-act="impcommit" ${I.add || I.same ? "" : "disabled"}>${I.add ? `Import ${I.add} ${esc(I.add === 1 ? (staff ? word("staff") : word("client")) : what)}` : I.same ? "Link the ones already here" : "Nothing to import"}</button>
+        <button class="sm block-s" data-act="impagain">Start again</button>`
+      : `<p class="muted">${staff ? `A CSV file, or rows copied from a spreadsheet. The first row names the columns: <b>name</b>, <b>short name</b>, <b>role</b>, <b>services</b> (separated by ;), <b>days</b> (Mon-Fri, Mon;Wed;Fri, or Pr-Pn), <b>hours</b> (8-16). Only the name is needed.`
+          : `A CSV file, or rows copied from a spreadsheet. The first row names the columns: <b>name</b> (or <b>first name</b> and <b>last name</b>), <b>phone</b>, <b>age</b> or <b>birth date</b>, <b>notes</b>. Lithuanian names work too (vardas, pavardė, telefonas). The phone number is needed: ${esc(S.assistant)} recognises callers by it.`}</p>
+        <pre class="imp-ex">${staff ? "name;role;services;days;hours\nDr. Ieva Žemaitė;Oral surgeon;" + esc(Object.values(S.specialties)[1] || "General") + ";Tue-Fri;9-15" : "name;phone;age;notes\nJonas Petrauskas;+370 612 34567;52;Prefers mornings"}</pre>
+        <button class="dbb" data-act="impfile">Choose a file…</button>
+        <label class="lbl-s" for="imptext">Or paste the rows</label>
+        <textarea id="imptext" class="cfgin wide" rows="7" placeholder="Paste here" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
+        <button class="primary block" data-act="impcheck">Check</button>`}
+    </div>`;
+  }
   let planId = "";
   function renderPlan() {
     const el = $("#plansheet"), P = (S.planners || []).find(x => x.id === planId);
@@ -1842,6 +2031,7 @@ function clientApp() {
       <h3 class="sec2">${esc(word("Staffs"))}</h3>
       <small class="muted">Link each ${esc(word("staff"))} to their person in ${esc(P.label)}: Frontly offers their free times from there and books them there.</small>
       ${staff.map(d => `<div class="lrow"><b>${esc(d.name)}</b><select class="voicesel planlink" data-staff="${esc(d.id)}" aria-label="${esc(d.name)} in ${esc(P.label)}"><option value="">Not linked</option>${people.map(([v, l]) => `<option value="${esc(v)}" ${(d.ext || {})[P.id] === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>`).join("")}
+      ${P.clients ? `<h3 class="sec2">${esc(word("Clients"))}</h3><div class="srow"><div class="grow"><b>Import ${esc(word("clients"))} from ${esc(P.label)}</b><small class="muted wrap">Everyone on record there with a phone number; a preview comes first</small></div><button class="sm" data-act="impengine" ${st.ok ? "" : "disabled"}>Import</button></div>` : ""}
       <div class="srow"><div class="grow"><b>Bring in everyone from ${esc(P.label)}</b><small class="muted wrap">Adds whoever isn't linked yet as a ${esc(word("staff"))}, or links them by name</small></div><button class="sm" data-act="planimport" ${st.ok ? "" : "disabled"}>Import</button></div>
       ${!P.can.cancel || !P.can.move ? `<p class="note rule-n">Frontly books new ${esc(word("visits"))} in ${esc(P.label)}. ${[!P.can.cancel && "Cancelling", !P.can.move && "moving"].filter(Boolean).join(" and ")} a ${esc(word("visit"))} has to be done in ${esc(P.label)} as well: its API has no way for Frontly to do it yet.</p>` : ""}
       <h3 class="sec2">Use it</h3>
@@ -2799,7 +2989,7 @@ function clientApp() {
         <div class="pgroup"><span>Group by</span>${[["status", "Status"], ["recent", "Last contact"], ["az", "Name"]].map(([v, l]) => `<button class="chip ${grp === v ? "on" : ""}" data-act="pgroup" data-v="${v}" aria-pressed="${grp === v}">${l}</button>`).join("")}</div>
       </div>
       ${groups.length ? `<div class="plist">${groups.map(g => `<section class="pgrp" aria-label="${esc(g.title)}"><h3 class="pgrp-h">${esc(g.title)}<i>${g.rows.length}</i></h3>${g.rows.map(r => patCard(r.p, r.x)).join("")}</section>`).join("")}</div>`
-        : `<div class="empty"><h2>No one found</h2><p>${q ? "Try another name or number." : patFilter !== "all" ? "Nobody in this group right now." : `${word("Clients")} appear here after their first call.`}</p>${patFilter !== "all" ? `<button class="primary" data-act="pfilter" data-v="all">Show everyone</button>` : ""}</div>`}`;
+        : `<div class="empty"><h2>No one found</h2><p>${q ? "Try another name or number." : patFilter !== "all" ? "Nobody in this group right now." : `${word("Clients")} appear here after their first call, or bring them in from a file or a spreadsheet.`}</p>${patFilter !== "all" ? `<button class="primary" data-act="pfilter" data-v="all">Show everyone</button>` : q ? "" : `<button class="primary" data-act="impopen" data-v="clients">Import ${esc(word("clients"))}</button>`}</div>`}`;
   }
   const digitsOf = s => String(s || "").replace(/\D/g, "");
   const clip = (x, n) => { x = String(x || ""); return x.length <= n ? x : x.slice(0, n).replace(/[\s,;:.]+\S*$/, "") + "…"; };   // at a word, not mid-number
@@ -2987,7 +3177,7 @@ function clientApp() {
     if (caseId && !byCall(caseId)) caseId = "";
     if (patId && !byPatient(patId)) patId = "";
     if (tab !== "patients" || document.activeElement !== $("#pq")) render(); else renderChrome();
-    renderCase(); renderPat(); renderAI(); renderCfg(); renderPlan();
+    renderCase(); renderPat(); renderAI(); renderCfg(); renderPlan(); renderImp();
   };
   function signIn() {
     const who = ($("#dwho") || {}).value, pin = ($("#dpin") || {}).value;
@@ -3142,6 +3332,13 @@ function clientApp() {
       case "toggle": S.settings[v] = !S.settings[v]; send("set", { k: v, v: S.settings[v] }); renderCfg(); renderAI(); break;
       case "aiopen": aiOpen = true; renderAI(); send("state", {}); break;   // fresh token counts
       case "cfgopen": cfgOpen = true; renderCfg(); break;
+      case "impopen": impKind = v; if (S.importing && S.importing.kind !== v) send("import-cancel", {}); renderImp(); $("#impsheet").scrollTop = 0; break;
+      case "impclose": if (S.importing) send("import-cancel", {}); impKind = ""; renderImp(); break;
+      case "impagain": send("import-cancel", {}); break;
+      case "impfile": send("import-file", { kind: impKind }); break;
+      case "impcheck": { const ta = $("#imptext"); if (ta && ta.value.trim()) send("import-check", { kind: impKind, text: ta.value }); break; }
+      case "impcommit": send("import-commit", {}); impKind = ""; renderImp(); break;
+      case "impengine": impKind = "clients"; renderImp(); send("import-engine-clients", { id: planId }); break;
       case "planopen": planId = v; renderPlan(); $("#plansheet").scrollTop = 0; break;
       case "planclose": planId = ""; renderPlan(); break;
       case "plantest": send("planner-test", { id: planId }); break;
@@ -3437,6 +3634,9 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .q-bk{font-size:calc(13.5px * var(--ts));font-weight:650;color:var(--signal);margin-top:6px}
 #casesheet,#patsheet{z-index:11}
 #plansheet{z-index:13}
+#impsheet{z-index:14}
+.imp-ex{background:var(--sheet);border:1px solid var(--rule);border-radius:12px;padding:10px 12px;font-size:calc(12.5px * var(--ts));overflow-x:auto;white-space:pre;margin:8px 0 12px}
+.block-s{display:block;margin:10px auto 0}
 .lrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--rule)}
 .lrow b{overflow-wrap:anywhere}
 .lrow select{width:100%;min-width:0}
@@ -3819,6 +4019,7 @@ const buildHTML = () => `<!doctype html><html lang="en" data-theme="${initTheme}
 <div id="aisheet" class="sheet" aria-label="AI settings"></div>
 <div id="cfgsheet" class="sheet" aria-label="Settings"></div>
 <div id="plansheet" class="sheet" aria-label="Planning service"></div>
+<div id="impsheet" class="sheet" aria-label="Import"></div>
 <div id="bpabout" aria-hidden="true"></div>
 <div id="toast" role="status"></div>
 <script>

@@ -164,6 +164,17 @@ Rename any word underneath (an "employee" can be a "consultant", a "customer" a 
 
 **Settings › Planning** chooses where bookings live: Frontly's own diary, or ClinicCards. Each planning service has its own settings window: the API key (kept in the Keychain), a connection test, the cabinet and the note for each visit, and which ClinicCards person each staff member is (or **Import** to link and add them). With ClinicCards in use, the free times come from its shifts minus its visits, and each booking is made there first, as a visit to confirm. Cancelling or moving a visit has to be done in ClinicCards as well: Frontly says so when you do it. Details, and how to add another planning service: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 
+### Import clients and staff
+
+**Settings › Data › Import** takes a CSV file (**Choose a file…**) or rows copied from Excel, Numbers or Google Sheets. The first row names the columns, in English or Lithuanian:
+
+| Importing | Columns (only the starred one is needed) |
+| --- | --- |
+| Clients | **name**\* (or first name and last name), **phone**\*, age or birth date, notes |
+| Staff | **name**\*, short name, role, services (separated by ;), days (Mon-Fri, Mon;Wed;Fri, Pr-Pn), hours (8-16) |
+
+A preview comes first: who's new, who's already here (clients by phone number, staff by name, "Dr." or not, kept as they are) and which rows are skipped and why. Nothing is saved until **Import**. With ClinicCards set up, its window also has **Import patients**.
+
 ### Correct a client's details
 
 On a client's page, **Edit details** changes the name, the phone number and the age (where the business asks for it). The number has to be the one they call from: Reva recognises callers by it, so two records can't share one. The new name shows everywhere and reaches the phone line at once. **Remove** takes the record away (not while a booking is ahead); their calls stay.
