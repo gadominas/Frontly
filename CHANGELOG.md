@@ -2,6 +2,18 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.5.1 (2026-11-13): A new logo for any front desk
+
+- 💬 **A request that becomes a booking**: The new logo is a speech bubble shaped like a calendar page, with a teal check for booked and a pink dot for a new call.
+- 🏢 **For any business**: No tooth any more: the logo fits a clinic, a car service or any office.
+- ✨ **Everywhere at once**: The app header, the launch animation, the widget and the app icon all show it.
+
+**Changes**
+
+- New logo: frame (two sound marks), drawing (a speech bubble with calendar rings and a header line), pop (a pink new-call dot), sweep (a teal check); the launch animation draws it in the same four steps
+- docs/logo.svg and the 1024 px app icon redrawn; the widget fetches the new icon with this version
+- README: banner (with a voice waveform instead of a heartbeat line), header text, every screenshot and the GIF wall redone
+
 ## 1.5.0 (2026-11-13): Any kind of office
 
 - 🏢 **Pick your kind of business**: Settings › Business: a dental clinic, a car service, or any office. Each brings its own words, services and the questions Reva asks.

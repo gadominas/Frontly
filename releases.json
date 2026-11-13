@@ -4,6 +4,34 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.5.1",
+      "date": "2026-11-13",
+      "title": "A new logo for any front desk",
+      "highlights": [
+        {
+          "icon": "💬",
+          "title": "A request that becomes a booking",
+          "text": "The new logo is a speech bubble shaped like a calendar page, with a teal check for booked and a pink dot for a new call."
+        },
+        {
+          "icon": "🏢",
+          "title": "For any business",
+          "text": "No tooth any more: the logo fits a clinic, a car service or any office."
+        },
+        {
+          "icon": "✨",
+          "title": "Everywhere at once",
+          "text": "The app header, the launch animation, the widget and the app icon all show it."
+        }
+      ],
+      "changes": [
+        "New logo: frame (two sound marks), drawing (a speech bubble with calendar rings and a header line), pop (a pink new-call dot), sweep (a teal check); the launch animation draws it in the same four steps",
+        "docs/logo.svg and the 1024 px app icon redrawn; the widget fetches the new icon with this version",
+        "README: banner (with a voice waveform instead of a heartbeat line), header text, every screenshot and the GIF wall redone"
+      ],
+      "fixes": []
+    },
+    {
       "version": "1.5.0",
       "date": "2026-11-13",
       "title": "Any kind of office",
