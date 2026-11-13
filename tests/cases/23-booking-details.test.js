@@ -70,7 +70,7 @@ scenario('booking details and cancelling', async (t) => {
   app.tap('#patsheet [data-act="apptcancel"]');
   await app.until(() => app.$('#dlg.open'), 2000, 'the dialog');
   const dl = app.text('#dlg');
-  t.check(/Cancel this visit\?/.test(dl) && /Giedrius Minas/.test(dl) && /Francesco Doctor/.test(dl) && /Frontly can't cancel it in ClinicCards/.test(dl), 'who, when, with whom, and that ClinicCards needs it too');
+  t.check(/Cancel this visit\?/.test(dl) && /Giedrius Minas/.test(dl) && /Francesco Doctor/.test(dl) && /Frontly marks it cancelled in ClinicCards too and checks that it took/.test(dl), 'who, when, with whom, and what happens in ClinicCards');
   app.tap('[data-act="dlgkeep"]');
   t.check(!app.$('#dlg.open') && pts().find((p) => p.id === gid).appts[0].status === 'booked', 'Keep it: nothing changes');
   app.tap('#patsheet [data-act="apptcancel"]');
@@ -78,7 +78,7 @@ scenario('booking details and cancelling', async (t) => {
   app.type('#dlg-why', 'Feeling better'); app.tap('[data-act="dlgcancel"]');
   await app.until(() => pts().find((p) => p.id === gid).appts[0].status === 'cancelled', 2000, 'cancelled');
   const ca = pts().find((p) => p.id === gid).appts[0];
-  t.check(ca.cancelled.reason === 'Feeling better' && ca.cancelled.by === 'Agnė Petrauskaitė' && !app.$('#dlg.open') && /Cancel it in ClinicCards too/.test(app.text('#toast')), 'cancelled with the reason and who; the toast reminds about ClinicCards');
+  t.check(ca.cancelled.reason === 'Feeling better' && ca.cancelled.by === 'Agnė Petrauskaitė' && !app.$('#dlg.open') && /It wasn't in ClinicCards any more/.test(app.text('#toast')), 'cancelled with the reason and who; the toast says the visit wasn’t in ClinicCards any more');
   await app.until(() => /Cancelled by Agnė Petrauskaitė/.test(app.text('#patsheet')), 2000, 'the history');
   t.check(/Feeling better/.test(app.text('#patsheet')), 'the visit history shows it');
 });

@@ -63,7 +63,7 @@ scenario('cliniccards', async (t) => {
   t.check(st().doctors.find((d) => d.id === 'd-petr').ext.cliniccards === '12' && st().doctors.find((d) => d.id === 'd-kazl').ext.cliniccards === '11' && st().doctors.length === 5, 'Tomas linked by hand; Rūta linked by name on import (“Dr.” or not); nobody added twice');
   app.type('.plancfg[data-k="room"]', '5');
   await app.until(() => ((st().plannerCfg || {}).cliniccards || {}).room === '5', 2000, 'the cabinet');
-  t.check(/Cancelling and moving a visit has to be done in ClinicCards as well/.test(app.text('#plansheet')), 'what Frontly can’t do there is said plainly');
+  t.check(/Cancelling a visit in Frontly marks it cancelled in ClinicCards as well \(status CANCELED\)/.test(app.text('#plansheet')) && /Moving a visit has to be done in ClinicCards as well/.test(app.text('#plansheet')), 'what Frontly does and can’t do there is said plainly');
   app.tap('#plansheet [data-act="planuse"]');
   await app.until(() => st().planner === 'cliniccards', 2000, 'in use');
   t.check(/Bookings go to ClinicCards/.test(app.text('#plansheet')), 'ClinicCards is in use');
@@ -105,8 +105,8 @@ scenario('cliniccards', async (t) => {
   await app.until(() => app.$('[data-act="openpat"]'), 2000, 'patients');
   app.tap('[data-act="openpat"]'); await app.until(() => app.$('#patsheet [data-act="apptcancel"]'), 2000, 'the visit');
   app.tap('#patsheet [data-act="apptcancel"]'); await app.until(() => app.$('#dlg.open'), 2000, 'the dialog'); app.tap('#dlg [data-act="dlgcancel"]');
-  await app.until(() => /Cancel it in ClinicCards too/.test(app.text('#toast')), 2000, 'the toast');
-  t.check(true, 'cancelled in Frontly, with a reminder to cancel it in ClinicCards');
+  await app.until(() => /It wasn't in ClinicCards any more/.test(app.text('#toast')), 3000, 'the toast');
+  t.check(true, 'cancelled in Frontly; the visit wasn’t in this ClinicCards’ list, so there was nothing to change there');
   app.tap('[data-act="patclose"]');
   app.tap('[data-act="tab"][data-v="cal"]');
   await app.until(() => app.$('.heatgrid'), 3000, 'the week');

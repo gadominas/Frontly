@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.15.0';
+const VERSION = '1.16.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -1311,6 +1311,7 @@ const PLANNERS = {
     fields: [
       { k: "room", label: "Cabinet", type: "select", list: "rooms", help: "Where a visit goes when the shift doesn't name a cabinet" },
       { k: "limit", label: "Comment length", type: "select", options: [["400", "400 characters (what ClinicCards keeps)"], ["1000", "1,000 characters"], ["2000", "2,000 characters"], ["4000", "4,000 characters"]], def: "400", help: "How much of a visit's comment ClinicCards keeps: anything longer is cut off there" },
+      { k: "cancelStatus", label: "Cancelled status", type: "text", def: "CANCELED", help: "What ClinicCards calls a cancelled visit. Check the diary lists the statuses your visits use" },
       { k: "note", label: "Start each comment with", type: "text", def: "", help: "Optional, such as your initials; the comment itself is written in the language of the call" },
     ],
     async req(method, path, query, body) {
@@ -1353,7 +1354,9 @@ const PLANNERS = {
         const q = { from: ymd(a), to: ymd(Math.min(to, a + 6 * DAY)) };
         const [shifts, visits, spaces] = await Promise.all([this.req("GET", "schedule-shifts", q), this.req("GET", "visits", q).catch(() => []), this.req("GET", "schedule-spaces", q).catch(() => [])]);
         rowsOf(shifts).forEach(x => { const r = shiftOf(x); if (r) out.shifts.push(r); });
+        const cancelled = new RegExp("CANCEL|DELETED|REJECT|" + String(plannerCfg("cliniccards").cancelStatus || "CANCELED").replace(/[^\w]/g, ""), "i");
         rowsOf(visits).concat(rowsOf(spaces)).forEach(x => {
+          if (x.status && cancelled.test(String(x.status))) return;   // a cancelled visit frees its time
           const a2 = localTime(x.visit_start || x.space_start || x.start || x.date_start), b2 = localTime(x.visit_end || x.space_end || x.end || x.date_end);
           const who = String(x.doctor_id || x.staff_id || x.specialist_id || x.created_by_id || "");
           if (a2 < b2) out.busy.push({ staff: who, start: a2, end: b2 });   // no person: blocked for everyone
@@ -1364,11 +1367,14 @@ const PLANNERS = {
     // Settings › Planning › ClinicCards › Check the diary: what one week's shifts look like, to find why times are missing
     async inspect(from) {
       const q = { from: ymd(from), to: ymd(from + 6 * DAY) }, raw = await this.req("GET", "schedule-shifts", q);
+      const vs = rowsOf(await this.req("GET", "visits", q).catch(() => [])), stat = {};
+      vs.forEach(v => { const k = String(v.status || "(none)").toUpperCase(); stat[k] = (stat[k] || 0) + 1; });
       const rows = rowsOf(raw), people = await this.staff().catch(() => []), name = id => (people.find(p => p.id === id) || {}).name || "not in the staff list";
       const by = {}; rows.forEach(x => { const r = shiftOf(x), k = r ? r.staff : "?"; by[k] = (by[k] || 0) + 1; });
       const linked = id => ALL_DOCTORS.find(d => d.ext && d.ext.cliniccards === id);
       return { range: `${q.from} to ${q.to}`, count: rows.length, unread: rows.filter(x => !shiftOf(x)).length,
         people: Object.entries(by).map(([id, n]) => ({ id, n, name: id === "?" ? "unreadable" : name(id), linked: id !== "?" && linked(id) ? linked(id).short : "" })),
+        statuses: Object.entries(stat).sort((a, b) => b[1] - a[1]), visitFields: vs[0] && typeof vs[0] === "object" ? Object.keys(vs[0]).slice(0, 14) : [],
         fields: rows[0] && typeof rows[0] === "object" ? Object.keys(rows[0]).slice(0, 12) : [], shape: Array.isArray(raw) ? "a list" : raw && typeof raw === "object" ? "grouped: " + Object.keys(raw).slice(0, 4).join(", ") : typeof raw };
     },
     async findClient(phone) {
@@ -1415,6 +1421,34 @@ const PLANNERS = {
         if (!fresh) break;
       }
       return out;
+    },
+    // One visit read back from its day (and patient), by its id
+    async findVisit(ref, at, pid) {
+      const d = ymd(at), rows = rowsOf(await this.req("GET", "visits", Object.assign({ from: d, to: d }, pid ? { patient_id: pid } : {})));
+      return rows.find(x => String(x.visit_id || x.id || "") === String(ref)) || null;
+    },
+    // Cancelling = the visit's status changed to the cancelled one (Settings: Cancelled status). The published API shows
+    // no call for it, so Frontly tries PATCH with the status, then PUT with the whole visit, and reads the visit again
+    // to be sure it took; the way that worked is remembered. Never POST: that could create a second visit.
+    async cancel({ ref, at, client, staff, room }) {
+      const status = String(plannerCfg("cliniccards").cancelStatus || "CANCELED").trim().toUpperCase();
+      const st = (settings.plannerState = settings.plannerState || {}).cliniccards = Object.assign({}, (settings.plannerState || {}).cliniccards);
+      const before = await this.findVisit(ref, at, client);
+      if (!before) return { ok: true, gone: true };   // not in ClinicCards any more: nothing to change there
+      if (String(before.status || "").toUpperCase() === status) return { ok: true };
+      const s0 = localTime(before.visit_start || before.start) || at, e0 = localTime(before.visit_end || before.end) || at + cfg("slotMinutes") * 60e3;
+      const whole = { status, patient_id: before.patient_id || client, doctor_id: before.doctor_id || staff, cabinet_id: before.cabinet_id || room,
+        note: before.note != null ? before.note : before.comment || "", date: ymd(s0), time_start: hm(s0), time_end: hm(e0) };
+      let why = "";
+      for (const how of st.cancelVia ? [st.cancelVia] : ["PATCH", "PUT"]) {
+        try { await this.req(how, "visits/" + encodeURIComponent(ref), undefined, how === "PATCH" ? { status } : whole); }
+        catch (e) { why = String(e.message || e).replace(/^ClinicCards:\s*/, ""); continue; }
+        const after = await this.findVisit(ref, at, client).catch(() => undefined);
+        if (after === null || (after && String(after.status || "").toUpperCase() === status)) { st.cancelVia = how; return { ok: true, how }; }
+        why = "it answered, but the visit's status didn't change";
+      }
+      delete st.cancelVia;   // whatever worked before doesn't now: try every way next time
+      return { ok: false, why };
     },
     async book(x) {
       let pid = x.client.ref || "";
@@ -1732,7 +1766,7 @@ function clientState() {
     patients, calls: calls.slice(0, 200),
     planner: { id: plannerId(), label: planner().label, can: planner().can },
     syncWith: syncEngineId() ? { id: syncEngineId(), label: PLANNERS[syncEngineId()].label } : null,
-    planners: Object.entries(PLANNERS).map(([id, P]) => ({ id, label: P.label, cancels: !!P.cancel || !!P.builtin, about: P.about, help: P.help || "", docs: P.docs || "", builtin: !!P.builtin, can: P.can, secret: P.secret || "",
+    planners: Object.entries(PLANNERS).map(([id, P]) => ({ id, label: P.label, cancels: !!P.cancel || !!P.builtin, cancelSure: !!P.builtin || !!(((settings.plannerState || {})[id] || {}).cancelVia), about: P.about, help: P.help || "", docs: P.docs || "", builtin: !!P.builtin, can: P.can, secret: P.secret || "",
       fields: (P.fields || []).map(({ k, label, type, list, help, def, options }) => ({ k, label, type, list, help, def, options })), clients: !!P.clients, inspect: !!P.inspect, cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
     ext: extDiary && extDiary.id === plannerId() ? extDiary : null,
     importing: importView(pendingImport),
@@ -1910,12 +1944,18 @@ async function handle(m) {
     case "appt-cancel": {
       const pt = patients.find(p => p.id === m.patient), a = pt && (pt.appts || []).find(x => x.id === m.appt), there = a && a.ext && PLANNERS[a.ext.planner];
       if (!a || a.status !== "booked") return call("__done", m.req, false, "That visit isn't booked any more");
-      if (there && there.cancel) {   // cancelled there first; if that fails, nothing changes here
-        try { await there.cancel({ ref: a.ext.ref, reason: m.reason || "" }); }
-        catch (e) { return call("__done", m.req, false, `${there.label}: ${String(e.message || e).slice(0, 140)}. Nothing was cancelled.`); }
+      let res = null;
+      if (there && there.cancel) {   // marked cancelled there if it can be; Frontly's copy is cancelled either way
+        const doc = docById(a.doctor) || {};
+        try { res = await there.cancel({ ref: a.ext.ref, at: a.at, client: (pt.ext || {})[a.ext.planner] || "", staff: (doc.ext || {})[a.ext.planner] || "", room: plannerCfg(a.ext.planner).room || "", reason: m.reason || "" }); }
+        catch (e) { res = { ok: false, why: String(e.message || e).replace(/^ClinicCards:\s*/, "").slice(0, 140) }; }
       }
-      cancelAppt(m); saveWidget(widgetSnapshot()); saveAll();
-      toast(there && !there.cancel ? `Cancelled in Frontly. Cancel it in ${there.label} too: Frontly can't do that through its API yet` : there ? `Cancelled in Frontly and ${there.label}` : "Visit cancelled");
+      cancelAppt(m);
+      if (res) a.cancelled.there = res.ok ? (res.gone ? "gone" : "done") : "not";
+      saveWidget(widgetSnapshot()); saveAll();
+      toast(!there ? "Visit cancelled" : !there.cancel ? `Cancelled in Frontly. Cancel it in ${there.label} too: Frontly can't do that through its API yet`
+        : res.ok ? (res.gone ? `Cancelled. It wasn't in ${there.label} any more` : `Cancelled in Frontly and marked cancelled in ${there.label}`)
+        : `Cancelled in Frontly. ${there.label} didn't take the cancellation (${res.why}): cancel it there too`);
       push();
       if (lineOn()) lineReq("PUT", "/patients", patientsBrief()).catch(e => startLog("phone line: " + String(e.message || e).slice(0, 100)));
       return call("__done", m.req, true, "");
@@ -2485,7 +2525,8 @@ function clientApp() {
       ${staff.map(d => `<div class="lrow"><b>${esc(d.name)}</b><select class="voicesel planlink" data-staff="${esc(d.id)}" aria-label="${esc(d.name)} in ${esc(P.label)}"><option value="">Not linked</option>${people.map(([v, l]) => `<option value="${esc(v)}" ${(d.ext || {})[P.id] === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>`).join("")}
       ${P.clients ? `<h3 class="sec2">${esc(word("Clients"))}</h3><div class="srow"><div class="grow"><b>Import ${esc(word("clients"))} from ${esc(P.label)}</b><small class="muted wrap">Everyone on record there with a phone number; a preview comes first</small></div><button class="sm" data-act="impengine" ${st.ok ? "" : "disabled"}>Import</button></div>` : ""}
       <div class="srow"><div class="grow"><b>Import ${esc(word("staffs"))} from ${esc(P.label)}</b><small class="muted wrap">Choose who; they come in linked, with their service, days and hours</small></div><button class="sm" data-act="stfopen" data-v="${esc(P.id)}" ${st.ok ? "" : "disabled"}>Import</button></div>
-      ${!P.can.cancel || !P.can.move ? `<p class="note rule-n">Frontly books new ${esc(word("visits"))} in ${esc(P.label)}. ${[!P.can.cancel && "Cancelling", !P.can.move && "moving"].filter(Boolean).join(" and ")} a ${esc(word("visit"))} has to be done in ${esc(P.label)} as well: its API has no way for Frontly to do it yet.</p>` : ""}
+      ${P.cancels && !P.can.cancel ? `<p class="note">Cancelling a ${esc(word("visit"))} in Frontly marks it cancelled in ${esc(P.label)} as well (status ${esc(P.cfg.cancelStatus || "CANCELED")}), and checks that it took${(P.state || {}).cancelVia ? `: it has worked before` : ""}.</p>` : ""}
+      ${(!P.can.cancel && !P.cancels) || !P.can.move ? `<p class="note rule-n">Frontly books new ${esc(word("visits"))} in ${esc(P.label)}. ${[!P.can.cancel && !P.cancels && "Cancelling", !P.can.move && "moving"].filter(Boolean).join(" and ").replace(/^m/, "M")} a ${esc(word("visit"))} has to be done in ${esc(P.label)} as well: its API has no way to yet.</p>` : ""}
       <h3 class="sec2">Use it</h3>
       ${on ? `<div class="srow"><div class="grow"><b>Bookings go to ${esc(P.label)}</b></div><button class="sm" data-act="planuse" data-v="builtin">Back to Frontly's diary</button></div>`
         : `<button class="primary block" data-act="planuse" data-v="${esc(P.id)}" ${st.ok ? "" : "disabled"}>${st.ok ? `Use ${esc(P.label)} for bookings` : "Test the connection first"}</button>`}
@@ -2497,6 +2538,7 @@ function clientApp() {
     return `<div class="insp-r"><b>${r.count} shift${r.count === 1 ? "" : "s"} from ${esc(r.range)}</b><small class="muted">The reply is ${esc(r.shape)}${r.fields.length ? `; a shift has: ${esc(r.fields.join(", "))}` : ""}.</small>
       ${r.people.length ? `<ul class="notes">${r.people.map(x => `<li><p>${esc(x.name)} <span class="muted">(id ${esc(x.id)})</span>: ${x.n} shift${x.n === 1 ? "" : "s"}</p><small class="${x.linked ? "muted" : "rule-n"}">${x.linked ? "Linked to " + esc(x.linked) : x.id === "?" ? "Frontly couldn't read who these are for" : "Not linked to anyone in Frontly"}</small></li>`).join("")}</ul>`
         : `<p class="note rule-n">No shifts at all that week. In ${esc(P.label)}, free times come from the schedule's shifts: add them there for the people who take bookings.</p>`}
+      ${(r.statuses || []).length ? `<small class="muted">Visit statuses that week: ${r.statuses.map(([k, n]) => `${esc(k)} (${n})`).join(", ")}${r.visitFields && r.visitFields.length ? `; a visit has: ${esc(r.visitFields.join(", "))}` : ""}.</small>` : ""}
       ${r.unread ? `<p class="note rule-n">${r.unread} couldn't be read. Send the field names above to whoever set Frontly up.</p>` : ""}</div>`;
   }
   function lineHTML() {
@@ -3716,7 +3758,7 @@ function clientApp() {
     el.innerHTML = `<div class="dlg-card" role="dialog" aria-modal="true" aria-labelledby="dlg-t">
       <h2 id="dlg-t">Cancel this ${esc(word("visit"))}?</h2>
       <p class="dlg-what"><b>${esc(pt.name)}</b><span>${esc(new Date(a.at).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }))}, ${hhmm(a.at)}</span><span class="muted">${esc(d.name || "")}${a.reason ? " · " + esc(a.reason) : ""}</span></p>
-      ${P ? (P.cancels ? `<p class="note">It's cancelled in ${esc(P.label)} too.</p>` : `<p class="note rule-n">Frontly can't cancel it in ${esc(P.label)}: its API has no way to yet. Cancel it there as well after this.</p>`) : ""}
+      ${P ? (P.cancels ? (P.cancelSure ? `<p class="note">It's marked cancelled in ${esc(P.label)} too.</p>` : `<p class="note">Frontly marks it cancelled in ${esc(P.label)} too and checks that it took. If ${esc(P.label)} doesn't accept it, you'll be told to cancel it there.</p>`) : `<p class="note rule-n">Frontly can't cancel it in ${esc(P.label)}: its API has no way to yet. Cancel it there as well after this.</p>`) : ""}
       <label class="lbl-s" for="dlg-why">Why <span class="muted">(optional)</span></label>
       <input id="dlg-why" class="cfgin wide" placeholder="Asked to cancel, feeling better, booked elsewhere…" autocomplete="off" value="${esc(dlg.why || "")}">
       ${dlg.err ? `<p class="err">${esc(dlg.err)}</p>` : ""}
@@ -3763,7 +3805,7 @@ function clientApp() {
       <h3 class="sec2">Calls</h3>
       ${cl.length ? cl.map(c => `<button class="crow" data-act="opencase" data-id="${esc(c.id)}"><span class="stripe tri-${esc((c.summary || {}).triage || "routine")}"></span><span class="grow"><b>${esc((c.summary || {}).reason || "Call")}</b><small>${esc(whenFull(c.at))}${INTENT_L[c.intent] ? " · " + INTENT_L[c.intent] : c.followUp ? " · called again" : ""}${c.mood ? " · " + (S.moods[c.mood.label] || "") + " " + esc(c.mood.label) : ""}</small></span>${statusPill(c)}</button>`).join("") : `<p class="muted">No calls yet.</p>`}
       <h3 class="sec2">${esc(word("Visits"))}</h3>
-      ${past.length ? `<ul class="hist">${past.map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.fromEngine ? ` <span class="pill soft">${esc(((S.planners || []).find(x => x.id === a.fromEngine) || {}).label || "")}</span>` : ""}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}${a.cancelled ? `<small class="muted cx">Cancelled${a.cancelled.by ? " by " + esc(a.cancelled.by) : ""}, ${esc(dayLabel(a.cancelled.at))}${a.cancelled.reason ? ": " + esc(a.cancelled.reason) : ""}</small>` : ""}${a.info ? ` <button class="link small" data-act="apptinfo" data-v="${esc(a.id)}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}${apptOpen === a.id ? apptInfoHTML(a) : ""}</li>`).join("")}</ul>` : `<p class="muted">No ${esc(word("visits"))} yet.</p>`}
+      ${past.length ? `<ul class="hist">${past.map(a => `<li><b>${esc(new Date(a.at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))}</b> ${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).short || "")}${a.fromEngine ? ` <span class="pill soft">${esc(((S.planners || []).find(x => x.id === a.fromEngine) || {}).label || "")}</span>` : ""}${a.status !== "done" ? ` <span class="pill soft">${esc(a.status)}</span>` : ""}${a.cancelled ? `<small class="muted cx">Cancelled${a.cancelled.by ? " by " + esc(a.cancelled.by) : ""}, ${esc(dayLabel(a.cancelled.at))}${a.cancelled.reason ? ": " + esc(a.cancelled.reason) : ""}${a.cancelled.there === "done" ? ` · marked cancelled in ${esc(((S.planners || []).find(x => a.ext && x.id === a.ext.planner) || {}).label || "")}` : a.cancelled.there === "not" ? ` · <span class="rule-n">still to cancel in ${esc(((S.planners || []).find(x => a.ext && x.id === a.ext.planner) || {}).label || "")}</span>` : ""}</small>` : ""}${a.info ? ` <button class="link small" data-act="apptinfo" data-v="${esc(a.id)}">${apptOpen === a.id ? "Hide" : "Details"}</button>` : ""}${apptOpen === a.id ? apptInfoHTML(a) : ""}</li>`).join("")}</ul>` : `<p class="muted">No ${esc(word("visits"))} yet.</p>`}
       <h3 class="sec2">Notes</h3>
       ${(p.notes || []).length ? `<ul class="notes">${p.notes.map(n => `<li><p>${esc(n.text)}</p><small class="muted">${esc(n.by)} · ${esc(dayLabel(n.at))}</small></li>`).join("")}</ul>` : `<p class="muted">No notes yet.</p>`}
       <textarea id="patnote" class="cfgin wide" rows="3" placeholder="Add a note to ${esc(p.name.split(" ")[0])}'s record"></textarea>
