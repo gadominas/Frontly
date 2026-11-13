@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.14.0';
+const VERSION = '1.15.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -172,6 +172,7 @@ const TEMPLATES = {
     ],
     order: ["general", "endo", "surgery", "ortho", "hygiene", "kids"],   // how the services are listed
     len: { general: 30, endo: 60, surgery: 90, ortho: 30, hygiene: 45, kids: 30 },   // usual minutes (Settings › Business)
+    roles: { hygiene: "hygien|higien", surgery: "surg|chirurg|implant|maxillo|veido", ortho: "orthodont|ortodont", endo: "endodont", kids: "pediatr|paediatr|child|vaik", general: "general|therap|terapeut|odontolog|dentist" },   // job titles, for Import from ClinicCards
     heals: "surgery",   // the service that needs time to heal between two visits (Settings › Booking)
     ask: ["name", "age", "complaint", "location", "pain", "urgency", "preferred", "notes"],
     labels: { complaint: "Reason", location: "Where", pain: "Pain" },
@@ -201,6 +202,7 @@ const TEMPLATES = {
     ],
     order: ["general", "service", "diag", "brakes", "tyres", "electric", "body"],
     len: { general: 60, service: 60, diag: 45, brakes: 90, tyres: 30, electric: 60, body: 120 },
+    roles: { electric: "electric|elektrik", body: "body|kėbul|paint|dažyt", tyres: "tyre|tire|padang", diag: "diagnos", general: "mechanic|mechanik" },
     heals: "",
     ask: ["name", "complaint", "location", "urgency", "preferred", "notes"],
     labels: { complaint: "Problem", location: "Car" },
@@ -1326,10 +1328,13 @@ const PLANNERS = {
       if (!j || typeof j !== "object" || j.result === "fail" || code >= 400) throw new Error("ClinicCards: " + String((j && j.error) || "HTTP " + code).slice(0, 120));
       return "data" in j ? j.data : j;
     },
-    async staff() {
-      const rows = await this.req("GET", "staff");
-      return (Array.isArray(rows) ? rows : []).filter(x => x && x.doctor_id && ["", "DOCTOR", "SPECIALIST"].includes(String(x.role || "").toUpperCase()))
-        .map(x => ({ id: String(x.doctor_id), name: [x.firstname, x.lastname].filter(Boolean).join(" ").trim() || "No. " + x.doctor_id, role: cap(String(x.role || "").toLowerCase()) }));
+    // Who takes bookings (doctors and specialists); with all, everyone, for Import from ClinicCards
+    async staff(all) {
+      const rows = rowsOf(await this.req("GET", "staff"));
+      return rows.filter(x => x && x.doctor_id && (all || ["", "DOCTOR", "SPECIALIST"].includes(String(x.role || "").toUpperCase())))
+        .map(x => ({ id: String(x.doctor_id), name: [x.firstname, x.lastname].filter(Boolean).join(" ").trim() || "No. " + x.doctor_id, role: cap(String(x.role || "").toLowerCase()),
+          books: ["", "DOCTOR", "SPECIALIST"].includes(String(x.role || "").toUpperCase()),
+          about: [x.specialization, x.speciality, x.specialty, x.position, x.profession, x.title, x.description].filter(v => typeof v === "string" && v.trim()).join(", ").slice(0, 120) }));
     },
     async test() {
       const staff = await this.staff();
@@ -1981,6 +1986,52 @@ async function handle(m) {
       return;
     }
     case "import-cancel": pendingImport = null; return push();
+    case "planner-people": {   // Import from the engine: everyone there, who's already here, a service and hours to suggest
+      const P = PLANNERS[m.id];
+      if (!P || P.builtin) return;
+      settings.plannerState = settings.plannerState || {};
+      const stt = settings.plannerState[m.id] = Object.assign({}, settings.plannerState[m.id], { people: { busy: true, at: Date.now(), list: [] } });
+      push();
+      try {
+        const people = await P.staff(true), from = sod(Date.now()), to = from + 27 * DAY;
+        const d = await P.diary(from, to).catch(() => ({ shifts: [] }));
+        const norm = n => String(n || "").toLowerCase().replace(/\b(dr|doc|prof|mr|mrs|ms)\.?\s+/g, "").replace(/\s+/g, " ").trim();
+        const list = people.map(x => {
+          const sh = (d.shifts || []).filter(y => y.staff === x.id);
+          const days = [...new Set(sh.map(y => new Date(y.start).getDay()))].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+          const hrs = sh.length ? { from: Math.floor(Math.min(...sh.map(y => new Date(y.start).getHours() + new Date(y.start).getMinutes() / 60))), to: Math.ceil(Math.max(...sh.map(y => new Date(y.end).getHours() + new Date(y.end).getMinutes() / 60))) } : null;
+          const linked = ALL_DOCTORS.find(dd => dd.ext && dd.ext[m.id] === x.id), same = !linked && ALL_DOCTORS.find(dd => !dd.archived && !(dd.ext && dd.ext[m.id]) && norm(dd.name) === norm(x.name));
+          const title = (x.about + " " + x.role).toLowerCase(), byRole = Object.entries(BIZ.roles || {}).find(([k, re]) => SPECIALTIES[k] && new RegExp(re, "i").test(title));
+          const guess = byRole ? byRole[0] : specialtyOf(x.about || x.role || "");
+          return { id: x.id, name: x.name, role: x.role, about: x.about, books: x.books, days: days.length ? days : null, from: hrs ? hrs.from : null, to: hrs ? hrs.to : null, shifts: sh.length,
+            linked: linked ? linked.name : "", same: same ? same.name : "", spec: SPECIALTIES[guess] ? guess : Object.keys(SPECIALTIES).includes("general") ? "general" : Object.keys(SPECIALTIES)[0] };
+        });
+        stt.people = { at: Date.now(), list };
+      } catch (e) { stt.people = { at: Date.now(), list: [], err: String(e.message || e).slice(0, 160) }; }
+      saveAll(); return push();
+    }
+    case "planner-people-import": {   // the ones ticked: added linked, or linked to the one with the same name
+      const P = PLANNERS[m.id], list = (((settings.plannerState || {})[m.id] || {}).people || {}).list || [];
+      if (!P) return;
+      settings.doctors = settings.doctors || ALL_DOCTORS.map(d => Object.assign({}, d));
+      const norm = n => String(n || "").toLowerCase().replace(/\b(dr|doc|prof|mr|mrs|ms)\.?\s+/g, "").replace(/\s+/g, " ").trim();
+      let added = 0, linked = 0;
+      (m.picks || []).forEach((pk, i) => {
+        const x = list.find(y => y.id === pk.id);
+        if (!x || settings.doctors.some(d => d.ext && d.ext[m.id] === x.id)) return;
+        const same = settings.doctors.find(d => !d.archived && !(d.ext && d.ext[m.id]) && norm(d.name) === norm(x.name));
+        if (same) { same.ext = Object.assign({}, same.ext, { [m.id]: x.id }); linked++; return; }
+        const spec = SPECIALTIES[pk.spec] ? pk.spec : x.spec;
+        settings.doctors.push({ id: "d-" + Date.now().toString(36) + i, name: x.name, short: x.name, role: x.about || x.role || cap(WORDS.staff), spec: [spec],
+          days: x.days || [1, 2, 3, 4, 5], from: x.from != null ? x.from : 8, to: x.to != null ? x.to : 16, ext: { [m.id]: x.id } });
+        added++;
+      });
+      setDoctors(); extDiary = null;
+      settings.plannerState[m.id].people = null;
+      saveAll(); saveWidget(widgetSnapshot()); push();
+      toast(added || linked ? `${added} added${linked ? `, ${linked} linked to ${linked === 1 ? "the one" : "those"} with the same name` : ""}` : "Nobody new to import");
+      return call("__done", m.req, true, "");
+    }
     case "planner-import": {   // everyone in the engine not yet linked becomes a staff member, linked
       const P = PLANNERS[m.id];
       if (!P || P.builtin) return;
@@ -2248,7 +2299,7 @@ function clientApp() {
   function dentistsHTML() {
     const rows = S.doctors.map(d => dent && dent.id === d.id ? dentForm() : `<div class="srow"><div class="grow"><b>${esc(d.name)}</b><small class="muted wrap">${esc(d.role)} · ${esc(daysText(d.days))} · ${pad2(d.from)}:00–${pad2(d.to)}:00</small></div><button class="sm" data-act="dentedit" data-id="${esc(d.id)}">Edit</button></div>`).join("");
     return `${rows || `<p class="muted pad-s">No ${word("staffs")} yet. Add each ${word("staff")} with their working days and hours; bookings and the calendar use them.</p>`}
-      ${dent && !dent.id ? dentForm() : `<div class="srow"><div class="grow"><b>Add a ${word("staff")}</b></div><button class="sm primary" data-act="dentnew">Add</button></div>`}`;
+      ${dent && !dent.id ? dentForm() : `<div class="srow"><div class="grow"><b>Add a ${word("staff")}</b>${stfFrom() ? `<small class="muted wrap">Or bring them in from ${esc(stfFrom().label)}, already linked</small>` : ""}</div>${stfFrom() ? `<button class="sm" data-act="stfopen" data-v="${esc(stfFrom().id)}">Import from ${esc(stfFrom().label)}</button>` : ""}<button class="sm primary" data-act="dentnew">Add</button></div>`}`;
   }
   function dentForm() {
     const d = dent, opt = (v, cur) => `<option value="${v}" ${v === cur ? "selected" : ""}>${pad2(v)}:00</option>`, hrs = []; for (let h = 5; h <= 23; h++) hrs.push(h);
@@ -2382,6 +2433,34 @@ function clientApp() {
     </div>`;
   }
   let planId = "";
+  // Import from a planning engine: everyone there, tick who to bring in, their service, days and hours from their shifts
+  let stf = null;
+  const stfFrom = () => (S.planners || []).find(P => P.id !== "builtin" && P.state && P.state.ok);   // a connected engine to import staff from   // { id, picks: { [personId]: { on, spec } } }
+  const DAYN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const daysTxt = d => { if (!d || !d.length) return ""; const o = d.slice().sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)), run = o.every((x, i) => !i || (o[i - 1] + 1) % 7 === x); return run && o.length > 2 ? `${DAYN[o[0]]}–${DAYN[o[o.length - 1]]}` : o.map(x => DAYN[x]).join(", "); };
+  function renderStf() {
+    const el = $("#stfsheet"), P = stf && (S.planners || []).find(x => x.id === stf.id);
+    el.classList.toggle("open", !!P); lockBody();
+    if (!P) return;
+    const ps = (P.state || {}).people, list = (ps && ps.list) || [];
+    list.forEach(x => { if (!stf.picks[x.id]) stf.picks[x.id] = { on: !x.linked && (x.books || !!x.same), spec: x.spec }; });
+    const n = list.filter(x => !x.linked && stf.picks[x.id].on).length;
+    el.innerHTML = `<div class="sh-head"><h2>Import from ${esc(P.label)}</h2><button class="link" data-act="stfclose">Cancel</button></div><div class="sh-body">
+      <p class="muted">Tick who should take bookings in Frontly. They come in linked to ${esc(P.label)}, with their days and hours from their shifts there; someone already in Frontly under the same name is linked, not added twice.</p>
+      ${!ps || ps.busy ? `<p class="note">${SPIN_SVG} Reading ${esc(P.label)}'s staff and their shifts…</p>`
+        : ps.err ? `<p class="note err">${esc(ps.err)}</p>`
+        : !list.length ? `<p class="muted">Nobody in ${esc(P.label)}'s staff list.</p>`
+        : `<div class="stflist">${list.map(x => { const pk = stf.picks[x.id], hours = x.days ? `${daysTxt(x.days)}, ${x.from}–${x.to}` : "No shifts in the next 4 weeks: Mon–Fri, 8–16 for now";
+          return `<div class="stf ${x.linked ? "done" : ""}">
+            <label class="stf-top"><input type="checkbox" class="stfpick" data-id="${esc(x.id)}" ${x.linked ? "checked disabled" : pk.on ? "checked" : ""} aria-label="Import ${esc(x.name)}">
+              <span class="grow"><b>${esc(x.name)}</b><small class="muted">${esc([x.role, x.about].filter(Boolean).join(" · ") || "No role given")}</small></span></label>
+            ${x.linked ? `<small class="stf-st">Already in Frontly as ${esc(x.linked)}</small>`
+              : x.same ? `<small class="stf-st">Links to ${esc(x.same)} in Frontly (same name)</small>`
+              : `<div class="stf-row"><select class="voicesel stfspec" data-id="${esc(x.id)}" aria-label="${esc(x.name)}: service" ${pk.on ? "" : "disabled"}>${Object.entries(S.specialties).map(([k, l]) => `<option value="${esc(k)}" ${pk.spec === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small class="muted">${esc(hours)}${x.days ? ` <span class="tag">from ${x.shifts} shift${x.shifts === 1 ? "" : "s"}</span>` : ""}</small></div>`}
+          </div>`; }).join("")}</div>
+        <button class="primary block" data-act="stfgo" ${n ? "" : "disabled"}>${n ? `Import ${n}` : "Tick someone to import"}</button>`}
+    </div>`;
+  }
   function renderPlan() {
     const el = $("#plansheet"), P = (S.planners || []).find(x => x.id === planId);
     el.classList.toggle("open", !!P); lockBody();
@@ -2405,7 +2484,7 @@ function clientApp() {
       <small class="muted">Link each ${esc(word("staff"))} to their person in ${esc(P.label)}: Frontly offers their free times from there and books them there.</small>
       ${staff.map(d => `<div class="lrow"><b>${esc(d.name)}</b><select class="voicesel planlink" data-staff="${esc(d.id)}" aria-label="${esc(d.name)} in ${esc(P.label)}"><option value="">Not linked</option>${people.map(([v, l]) => `<option value="${esc(v)}" ${(d.ext || {})[P.id] === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>`).join("")}
       ${P.clients ? `<h3 class="sec2">${esc(word("Clients"))}</h3><div class="srow"><div class="grow"><b>Import ${esc(word("clients"))} from ${esc(P.label)}</b><small class="muted wrap">Everyone on record there with a phone number; a preview comes first</small></div><button class="sm" data-act="impengine" ${st.ok ? "" : "disabled"}>Import</button></div>` : ""}
-      <div class="srow"><div class="grow"><b>Bring in everyone from ${esc(P.label)}</b><small class="muted wrap">Adds whoever isn't linked yet as a ${esc(word("staff"))}, or links them by name</small></div><button class="sm" data-act="planimport" ${st.ok ? "" : "disabled"}>Import</button></div>
+      <div class="srow"><div class="grow"><b>Import ${esc(word("staffs"))} from ${esc(P.label)}</b><small class="muted wrap">Choose who; they come in linked, with their service, days and hours</small></div><button class="sm" data-act="stfopen" data-v="${esc(P.id)}" ${st.ok ? "" : "disabled"}>Import</button></div>
       ${!P.can.cancel || !P.can.move ? `<p class="note rule-n">Frontly books new ${esc(word("visits"))} in ${esc(P.label)}. ${[!P.can.cancel && "Cancelling", !P.can.move && "moving"].filter(Boolean).join(" and ")} a ${esc(word("visit"))} has to be done in ${esc(P.label)} as well: its API has no way for Frontly to do it yet.</p>` : ""}
       <h3 class="sec2">Use it</h3>
       ${on ? `<div class="srow"><div class="grow"><b>Bookings go to ${esc(P.label)}</b></div><button class="sm" data-act="planuse" data-v="builtin">Back to Frontly's diary</button></div>`
@@ -3722,7 +3801,7 @@ function clientApp() {
     if (patId && !byPatient(patId)) patId = "";
     if (tab !== "patients" || document.activeElement !== $("#pq")) keep($("#list"), render); else renderChrome();
     keep($("#casesheet"), renderCase); keep($("#patsheet"), renderPat); keep($("#aisheet"), renderAI); keep($("#cfgsheet"), renderCfg);
-    keep($("#plansheet"), renderPlan); keep($("#impsheet"), renderImp); keep($("#regsheet"), renderReg); if (dlg) keep($("#dlg"), renderDlg);
+    keep($("#plansheet"), renderPlan); keep($("#impsheet"), renderImp); keep($("#regsheet"), renderReg); keep($("#stfsheet"), renderStf); if (dlg) keep($("#dlg"), renderDlg);
   };
   function signIn() {
     const who = ($("#dwho") || {}).value, pin = ($("#dpin") || {}).value;
@@ -3920,6 +3999,16 @@ function clientApp() {
       case "planclose": planId = ""; renderPlan(); break;
       case "plantest": send("planner-test", { id: planId }); break;
       case "planimport": send("planner-import", { id: planId }); break;
+      case "stfopen": stf = { id: v, picks: {} }; renderStf(); $("#stfsheet").scrollTop = 0; send("planner-people", { id: v }); break;
+      case "stfclose": stf = null; renderStf(); break;
+      case "stfgo": {
+        if (!stf) break;
+        const P = (S.planners || []).find(x => x.id === stf.id), list = (((P || {}).state || {}).people || {}).list || [];
+        const picks = list.filter(x => !x.linked && stf.picks[x.id] && stf.picks[x.id].on).map(x => ({ id: x.id, spec: stf.picks[x.id].spec }));
+        const id = stf.id; stf = null; renderStf();
+        send("planner-people-import", { id, picks }, () => {});
+        break;
+      }
       case "planuse": send("planner-use", { id: v }); break;
       case "svcadd": { const i = $("#svcnew"); if (i && i.value.trim()) send("svc-add", { l: i.value }); break; }
       case "svcdel": send("svc-remove", { k: v }); break;
@@ -3969,10 +4058,12 @@ function clientApp() {
     if (c.contains("ttsvoicesel")) { S.settings.ttsVoice = e.target.value; send("set", { k: "ttsVoice", v: e.target.value }); return; }
     if (c.contains("ttsmodelsel")) { S.settings.ttsModel = e.target.value; send("set", { k: "ttsModel", v: e.target.value }); renderCfg(); return; }
     if (c.contains("ttsinstr")) { S.settings.ttsInstructions = e.target.value.trim(); send("set", { k: "ttsInstructions", v: S.settings.ttsInstructions }); return; }
-    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && !c.contains("bizsel") && !c.contains("rgsel") && !c.contains("svclen") && !c.contains("plancfg") && !c.contains("planlink") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
+    if (c.contains("voicesel") && !c.contains("bkdoc") && !c.contains("bkmove") && !c.contains("bizsel") && !c.contains("rgsel") && !c.contains("svclen") && !c.contains("stfspec") && !c.contains("plancfg") && !c.contains("planlink") && e.target.id !== "dwho") { S.settings.voiceURI = e.target.value; send("set", { k: "voiceURI", v: e.target.value }); return; }
     if (e.target.id === "rg-book") { readReg(); renderReg(); return; }   // the request part shows or hides
     if (c.contains("rgsel")) { readReg(); return; }
     if (c.contains("bizsel")) { dent = null; send("business", { v: e.target.value }); return; }
+    if (c.contains("stfpick") && stf) { (stf.picks[e.target.dataset.id] = stf.picks[e.target.dataset.id] || {}).on = e.target.checked; renderStf(); return; }
+    if (c.contains("stfspec") && stf) { (stf.picks[e.target.dataset.id] = stf.picks[e.target.dataset.id] || {}).spec = e.target.value; return; }
     if (c.contains("svclen")) { send("svc-len", { k: e.target.dataset.k, v: e.target.value }); return; }
     if (c.contains("plancfg")) { send("planner-cfg", { id: planId, k: e.target.dataset.k, v: e.target.value }); return; }
     if (c.contains("planlink")) { send("planner-link", { id: planId, staff: e.target.dataset.staff, ext: e.target.value }); return; }
@@ -4230,6 +4321,16 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 #plansheet{z-index:13}
 #impsheet{z-index:14}
 #regsheet{z-index:12}
+#stfsheet{z-index:15}
+.stflist{display:flex;flex-direction:column;gap:8px;margin:10px 0 14px}
+.stf{border:1px solid var(--rule);border-radius:14px;padding:10px 12px;background:var(--sheet);display:flex;flex-direction:column;gap:6px}
+.stf.done{opacity:.6}
+.stf-top{display:flex;align-items:center;gap:12px}
+.stf-top input{width:22px;height:22px;flex:none;accent-color:var(--signal)}
+.stf-top .grow{display:flex;flex-direction:column;min-width:0}
+.stf-row{display:flex;flex-direction:column;gap:4px;padding-left:34px}
+.stf-row .voicesel{max-width:100%}
+.stf-st{padding-left:34px;color:var(--muted)}
 .lsync{position:relative}
 .lpie{position:absolute;top:-4px;right:-4px;width:15px;height:15px;border-radius:50%;background:conic-gradient(var(--signal) var(--p,360deg),var(--rule) 0);box-shadow:0 0 0 2px var(--paper)}
 .rvlist{max-width:680px;margin:0 auto;padding:4px 14px 0;display:flex;flex-direction:column;gap:8px}
@@ -4672,6 +4773,7 @@ const buildHTML = () => `<!doctype html><html lang="en" data-theme="${initTheme}
 <div id="plansheet" class="sheet" aria-label="Planning service"></div>
 <div id="impsheet" class="sheet" aria-label="Import"></div>
 <div id="regsheet" class="sheet" aria-label="Register"></div>
+<div id="stfsheet" class="sheet" aria-label="Import staff"></div>
 <div id="bpabout" aria-hidden="true"></div>
 <div id="dlg" class="dlg"></div>
 <div id="toast" role="status"></div>

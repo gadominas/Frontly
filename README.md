@@ -112,6 +112,7 @@ What else you need:
 | Book a caller | Tap the call: the suggested time is already selected. Change the dentist, day or time if you like, tap **Book** |
 | Choose how long | **How long** in the booking box: 5 min to 3 h. The suggestion says why: what the caller asked for ("an hour", "pusvalandžio"), the AI's estimate from the reason, or the service's usual length (Settings › Business). Only times with room for that long are offered |
 | Book a later date | **Pick a date** beside the days opens the date picker; any day from today on, with its free times (from ClinicCards when it's in use) |
+| Bring in staff from ClinicCards | **Settings › Dentists › Import from ClinicCards**: tick who takes bookings; each arrives linked, with a service guessed from their job title and days and hours from their shifts |
 | See a client's ClinicCards visits | Open their card: their visits are fetched (at most every 10 minutes) and the card says when; **Refresh** fetches again |
 | See what nobody has looked at | **Front desk › Review**: every call not yet reviewed, newest first, with what came of it. Booking or closing a call ticks it off; ✓ ticks off one you've only read; **Mark all reviewed** clears the list |
 | Take a call out | **Remove this call** at the bottom of the call: it's deleted from Frontly after you confirm; the client's record and visits stay |

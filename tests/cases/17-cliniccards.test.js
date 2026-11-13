@@ -55,7 +55,10 @@ scenario('cliniccards', async (t) => {
   t.step('B. Staff, cabinet and note');
   app.type('.planlink[data-staff="d-petr"]', '12');
   await app.until(() => ((st().doctors || []).find((d) => d.id === 'd-petr') || {}).ext, 2000, 'linked');
-  app.tap('[data-act="planimport"]');
+  app.tap('#plansheet [data-act="stfopen"]');
+  await app.until(() => app.$('#stfsheet .stflist'), 3000, 'the import window');
+  t.check(/Already in Frontly as Dr\. Tomas Petraitis/.test(app.text('#stfsheet')) && /Links to Dr\. Rūta Kazlauskienė in Frontly \(same name\)/.test(app.text('#stfsheet')) && !app.$('.stfpick[data-id="99"]').checked, 'Tomas already linked, Rūta linked by name, the admin not ticked');
+  app.tap('[data-act="stfgo"]');
   await app.until(() => ((st().doctors || []).find((d) => d.id === 'd-kazl') || {}).ext, 2000, 'imported');
   t.check(st().doctors.find((d) => d.id === 'd-petr').ext.cliniccards === '12' && st().doctors.find((d) => d.id === 'd-kazl').ext.cliniccards === '11' && st().doctors.length === 5, 'Tomas linked by hand; Rūta linked by name on import (“Dr.” or not); nobody added twice');
   app.type('.plancfg[data-k="room"]', '5');
