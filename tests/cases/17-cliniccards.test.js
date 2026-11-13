@@ -82,7 +82,7 @@ scenario('cliniccards', async (t) => {
   const v = posted.find((x) => x[0] === 'visits')[1], pa = posted.find((x) => x[0] === 'patients')[1];
   t.see('visit', JSON.stringify(v));
   t.check(pa.firstname === 'Jonas' && pa.lastname === 'Petrauskas' && pa.phone === '37061234567', 'the patient is created there, number in full digits');
-  t.check(v.status === 'BOOKING' && v.patient_id === '777' && v.doctor_id === '12' && v.cabinet_id === '5' && /^\d{4}-\d\d-\d\d$/.test(v.date) && v.time_start === pick.textContent && /^\d\d:\d\d$/.test(v.time_end) && /^Booked by Frontly: Root canal pain\n\nBooked by Frontly \(Agnė Petrauskaitė\)/.test(v.note) && /\nReason: Root canal pain\n/.test(v.note), 'a BOOKING visit with the doctor, cabinet, day, times and note');
+  t.check(v.status === 'BOOKING' && v.patient_id === '777' && v.doctor_id === '12' && v.cabinet_id === '5' && /^\d{4}-\d\d-\d\d$/.test(v.date) && v.time_start === pick.textContent && /^\d\d:\d\d$/.test(v.time_end) && /^Reason: Root canal pain/.test(v.note) && v.note.length <= 400 && !/Frontly|elevenlabs|openai/i.test(v.note), 'a BOOKING visit with the doctor, cabinet, day, times and note');
   await app.until(() => (app.json(app.path('patients.json')) || []).length === 1, 2000, 'Frontly’s copy');
   const jp = app.json(app.path('patients.json'))[0];
   t.check(jp.ext.cliniccards === '777' && jp.appts[0].ext.planner === 'cliniccards' && jp.appts[0].ext.ref === '4242', 'Frontly keeps its copy, with ClinicCards’ patient and visit ids');

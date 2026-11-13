@@ -114,7 +114,7 @@ What else you need:
 | Book a later date | **Pick a date** beside the days opens the date picker; any day from today on, with its free times (from ClinicCards when it's in use) |
 | See a client's ClinicCards visits | Open their card: their visits are fetched (at most every 10 minutes) and the card says when; **Refresh** fetches again |
 | Cancel a visit | **Cancel** on the client's page or in the case: a dialog shows the visit and asks why (optional). The reason and who cancelled stay in the history |
-| See what went with a booking | **Details** on a visit: the note, every detail, the conversation, and how much of it went to ClinicCards |
+| See what went with a booking | **Details** on a visit: the summary, every detail, the whole conversation, and the comment ClinicCards got (short, in the language of the call) |
 | Move a visit | A call asking to change a booking shows **Visit to move**; pick the new time and tap **Move to …** |
 | Get the AI's view | **✦ Ask AI to plan this visit** (it asks by itself when the patient has other visits, needs surgery, or wants a change) |
 | See how full the clinic is | **Calendar**: each dentist's day, the week and the month as percent taken, and **Trends** |

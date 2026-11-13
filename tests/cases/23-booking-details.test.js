@@ -1,6 +1,5 @@
-// 23 A booking carries everything Frontly knows (summary, details, warnings, mood, front-desk notes, the whole
-// conversation) into ClinicCards' visit note, with a shorter note if a long one is refused, and keeps it on the visit
-// (Details). Cancelling asks first in a dialog, says what happens in ClinicCards, and keeps the reason and who.
+// 23 A booking sends ClinicCards a short comment in the call's language (it keeps 400 characters), most important
+// first and nothing about the tools, with a shorter one if refused; Frontly keeps everything on the visit (Details). Cancelling asks first in a dialog, says what happens in ClinicCards, and keeps the reason and who.
 const { scenario } = require(process.env.TESTKIT || '../../../app-blueprints/testkit');
 
 scenario('booking details and cancelling', async (t) => {
@@ -35,24 +34,24 @@ scenario('booking details and cancelling', async (t) => {
     app.tap('[data-act="book"]');
   };
 
-  t.step('A. Everything goes into the ClinicCards visit');
+  t.step('A. A short comment in the language of the call');
   await book('c-1');
   await app.until(() => visits.length === 1, 4000, 'the visit');
   const note = visits[0].note;
-  t.check(/Real phone call \(elevenlabs\)/.test(note) && /, 3 min/.test(note) && /Triage: urgent, priority 4\/5, Root canal and severe pain/.test(note) && /Warnings: Severe pain/.test(note), 'where it came from, the triage, service and warnings');
-  t.check(/Summary \(openai\):\nGiedrius Minas reports severe lower-jaw pain/.test(note) && /Where: Lower jaw, widespread/.test(note) && /Pain: 8\/10/.test(note) && /Urgency: 4\/5/.test(note) && /Best time: Mornings/.test(note) && /Mood: in pain \(tense\)/.test(note), 'the AI summary, every detail and the mood');
-  t.check(/Front desk notes:\n- Prefers the morning \(Agnė Petrauskaitė\)/.test(note) && /Conversation:\nReva: Labas, skambinate į Northlight Dental\.\nCaller: Labas, čia Giedrius Minas/.test(note), 'the front desk’s notes and the whole conversation');
+  t.see('note', note.replace(/\n/g, ' | '));
+  t.check(note.length <= 400 && /^Priežastis: Severe pain, lower jaw\nDėmesio: Severe pain\nSkausmas: 8\/10\nVieta: Lower jaw, widespread\nSkubumas: 4\/5\nPageidaujamas laikas: Mornings\nTrukmė: \d+ min\./.test(note), 'Lithuanian labels, the most important first, within 400 characters');
+  t.check(!/Frontly|elevenlabs|openai|Summary|phone call|Real/i.test(note), 'nothing about the tools or how the call came in');
   await app.until(() => pts().length === 1 && pts()[0].appts.length, 3000, 'Frontly’s copy');
   const a = pts()[0].appts[0];
-  t.check(a.info && a.info.transcript.length === 4 && a.info.fields.pain === 8 && a.info.summary && a.ext.note === 'full', 'Frontly keeps the same on the visit, and that the whole story was sent');
+  t.check(a.info && a.info.transcript.length === 4 && a.info.fields.pain === 8 && a.info.summary && a.info.engineNote === note && a.ext.note === 'full', 'Frontly keeps everything, and the comment as sent');
   app.tap('[data-act="caseclosesheet"]');
 
-  t.step('B. A long note refused: a shorter one');
-  maxNote = visits[0].note.length - 60;   // the whole story is refused; without the conversation it fits
+  t.step('B. A comment refused: a shorter one');
+  maxNote = 170;   // the full comment (~260) is refused; the shorter one (at most 160) fits
   await book('c-2');
   await app.until(() => visits.length === 2, 4000, 'the second visit');
   const ona = pts().find((p) => p.name === 'Ona Kairienė');
-  t.check(visits[1].note.length <= maxNote && /Summary \(openai\)/.test(visits[1].note) && !/Conversation:/.test(visits[1].note) && ona.appts[0].ext.note === 'shorter', 'refused once, then booked with the summary and details but not the conversation');
+  t.check(visits[1].note.length <= 160 && /^Priežastis:/.test(visits[1].note) && ona.appts[0].ext.note === 'short', 'refused once, then booked with a shorter comment');
   app.tap('[data-act="caseclosesheet"]');
 
   t.step('C. Details on the client’s page');
@@ -63,9 +62,9 @@ scenario('booking details and cancelling', async (t) => {
   await app.until(() => app.$('#patsheet [data-act="apptinfo"]'), 2000, 'Details');
   app.tap('#patsheet [data-act="apptinfo"]');
   await app.until(() => app.$('.ainfo'), 2000, 'the details');
-  t.check(/Real phone call/.test(app.text('.ainfo')) && /sent to ClinicCards with the whole story/.test(app.text('.ainfo')) && /Lower jaw, widespread/.test(app.text('.ainfo')) && /Read the conversation \(4\)/.test(app.text('.ainfo')), 'the summary, details and where it was sent');
+  t.check(/The comment in ClinicCards/.test(app.text('.ainfo')) && /Priežastis: Severe pain/.test(app.text('.sentnote')) && /Lower jaw, widespread/.test(app.text('.ainfo')) && /Read the conversation \(4\)/.test(app.text('.ainfo')), 'the comment as sent, the details, and the whole conversation here');
   app.tap('.ainfo [data-act="appttx"]');
-  t.check(/Labai skauda apatinį žandikaulį/.test(app.text('.ainfo')), 'and the conversation');
+  t.check(/Labai skauda apatinį žandikaulį/.test(app.text('.ainfo')), 'the conversation');
 
   t.step('D. Cancelling asks first');
   app.tap('#patsheet [data-act="apptcancel"]');

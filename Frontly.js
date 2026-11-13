@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.11.0';
+const VERSION = '1.12.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -1284,7 +1284,8 @@ const PLANNERS = {
     can: { cancel: false, move: false },   // the API we could confirm has no call for these: done in ClinicCards
     fields: [
       { k: "room", label: "Cabinet", type: "select", list: "rooms", help: "Where a visit goes when the shift doesn't name a cabinet" },
-      { k: "note", label: "Note on each visit", type: "text", def: "Booked by Frontly", help: "The call's reason is added after it" },
+      { k: "limit", label: "Comment length", type: "select", options: [["400", "400 characters (what ClinicCards keeps)"], ["1000", "1,000 characters"], ["2000", "2,000 characters"], ["4000", "4,000 characters"]], def: "400", help: "How much of a visit's comment ClinicCards keeps: anything longer is cut off there" },
+      { k: "note", label: "Start each comment with", type: "text", def: "", help: "Optional, such as your initials; the comment itself is written in the language of the call" },
     ],
     async req(method, path, query, body) {
       const key = secretFor("cliniccards");
@@ -1446,31 +1447,65 @@ async function loadDiary(from, to, force) {
   return changed;
 }
 const diaryAhead = () => loadDiary(Date.now(), Date.now() + (cfg("daysAhead") + 7) * DAY).then(changed => { if (changed) push(); }).catch(() => {});
+// The language a call was held in: the call's own, or from what the caller said
+function callLang(c) {
+  if (["lt", "lv", "en"].includes(c.lang)) return c.lang;
+  const said = (c.transcript || []).filter(x => x.who === "caller").map(x => x.t).join(" ");
+  return /[ąčęėįšųūž]/i.test(said) ? "lt" : /[āēģīķļņū]/i.test(said) ? "lv" : "en";
+}
 // Everything Frontly knows that goes with a booking: kept on the visit (a.info) and sent as the engine's note.
 function bookingInfo(c, pt) {
   const s = c.summary || {}, f = c.fields || {};
-  return { at: Date.now(), by: settings.deskUser || "", source: c.source || c.engine || "", provider: c.provider || "", callAt: c.at, dur: c.dur || 0,
+  return { at: Date.now(), by: settings.deskUser || "", source: c.source || c.engine || "", provider: c.provider || "", callAt: c.at, dur: c.dur || 0, lang: callLang(c),
     reason: s.reason || f.complaint || "", summary: s.text || "", noteBy: s.kind === "ai" ? (s.provider || "AI") : s.kind || "", triage: s.triage || "", priority: s.priority || null,
     service: SPECIALTIES[s.specialty] || s.specialty || "", flags: (s.flags || []).slice(0, 6), hint: s.hint || "", intent: c.intent || "",
     fields: FIELD_KEYS.reduce((o, k) => { if (f[k] != null && f[k] !== "") o[k] = f[k]; return o; }, {}), mood: c.mood ? { label: c.mood.label, note: c.mood.note || "" } : null,
     deskNotes: (c.deskNotes || []).slice(0, 10).map(n => ({ by: n.by, at: n.at, text: n.text })), transcript: (c.transcript || []).slice(-80).map(x => ({ who: x.who, t: String(x.t || "").slice(0, 500) })) };
 }
 const FIELD_NAMES = () => Object.assign({}, FIELD_LABELS, BIZ.labels);
-// The note for the engine: everything, then shorter versions if it refuses a long one
-function bookingNote(info, pt, level) {
-  const L = FIELD_NAMES(), when = t => new Date(t).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-  const src = info.source === "phone" ? "Real phone call" + (info.provider ? " (" + info.provider + ")" : "") : info.source === "desk" ? "Registered at the front desk" : "Call in Frontly";
-  const head = [`Booked by Frontly${info.by ? " (" + info.by + ")" : ""}, ${when(info.at)}`, `${src}, ${when(info.callAt)}${info.dur ? `, ${Math.round(info.dur / 60)} min` : ""}`,
-    `Reason: ${info.reason || "-"}`, `Triage: ${info.triage || "-"}${info.priority ? `, priority ${info.priority}/5` : ""}${info.service ? `, ${info.service}` : ""}`].concat(info.len ? [`Length: ${info.len} min${info.lenWhy ? " (" + info.lenWhy + ")" : ""}`] : [], info.flags.length ? [`Warnings: ${info.flags.join("; ")}`] : []);
-  if (level === 2) return head.slice(0, 3).join("\n").slice(0, 380);
-  const fields = Object.entries(info.fields).filter(([k]) => k !== "name").map(([k, v]) => `${L[k] || k}: ${k === "pain" ? v + "/10" : k === "urgency" ? v + "/5" : v}`);
-  const mid = [].concat(info.summary ? ["", "Summary" + (info.noteBy ? ` (${info.noteBy})` : "") + ":", info.summary] : [], fields.length ? ["", "Details:"].concat(fields) : [],
-    info.mood ? [`Mood: ${info.mood.label}${info.mood.note ? " (" + info.mood.note + ")" : ""}`] : [],
-    pt ? ["", `${cap(WORDS.client)}: ${pt.name}${pt.age ? ", " + pt.age : ""}, ${pt.phone}`].concat((pt.appts || []).filter(a => a.status === "done" || (a.status === "booked" && a.at < Date.now())).slice(-3).map(a => `Earlier ${WORDS.visit}: ${when(a.at)}, ${a.reason || ""}`)) : [],
-    info.deskNotes.length ? ["", "Front desk notes:"].concat(info.deskNotes.map(n => `- ${n.text}${n.by ? " (" + n.by + ")" : ""}`)) : []);
-  if (level === 1) return head.concat(mid).join("\n").slice(0, 1800);
-  const talk = info.transcript.length ? ["", "Conversation:"].concat(info.transcript.map(x => `${x.who === "caller" ? "Caller" : cfg("assistantName")}: ${x.t}`)) : [];
-  return head.concat(mid, talk).join("\n").slice(0, 8000);
+// The comment for the engine: what the staff need, in the call's language, most important first, within the limit.
+// Nothing about the tools, the AI or how the call came in. The AI writes it when it can; otherwise a template.
+const NOTE_L = {
+  lt: { reason: "Priežastis", location: "Vieta", pain: "Skausmas", urgency: "Skubumas", preferred: "Pageidaujamas laikas", len: "Trukmė", flags: "Dėmesio", notes: "Pastabos", age: "Amžius", desk: "Registratūra", min: "min." },
+  lv: { reason: "Iemesls", location: "Vieta", pain: "Sāpes", urgency: "Steidzamība", preferred: "Vēlamais laiks", len: "Ilgums", flags: "Uzmanību", notes: "Piezīmes", age: "Vecums", desk: "Reģistratūra", min: "min." },
+  en: { reason: "Reason", location: "Where", pain: "Pain", urgency: "Urgency", preferred: "Best time", len: "Length", flags: "Note", notes: "Also", age: "Age", desk: "Front desk", min: "min" },
+};
+function fitNote(parts, limit) {   // whole parts while they fit, then the next one cut at a word
+  let out = "";
+  for (const p of parts.filter(Boolean)) {
+    const next = out ? out + "\n" + p : p;
+    if (next.length <= limit) { out = next; continue; }
+    const room = limit - (out ? out.length + 1 : 0);
+    if (room > 24) { const cut = p.slice(0, room - 1).replace(/\s+\S*$/, ""); out = (out ? out + "\n" : "") + cut + "…"; }
+    break;
+  }
+  return out;
+}
+function templateNote(info, limit) {
+  const L = NOTE_L[info.lang] || NOTE_L.en, f = info.fields || {};
+  return fitNote([
+    `${L.reason}: ${info.reason || f.complaint || "-"}`,
+    info.flags.length ? `${L.flags}: ${info.flags.join("; ")}` : "",
+    f.pain != null ? `${L.pain}: ${f.pain}/10` : "", f.location ? `${L.location}: ${f.location}` : "",
+    f.urgency != null ? `${L.urgency}: ${f.urgency}/5` : "", f.preferred ? `${L.preferred}: ${f.preferred}` : "",
+    info.len ? `${L.len}: ${info.len} ${L.min}` : "", f.age ? `${L.age}: ${f.age}` : "", f.notes ? `${L.notes}: ${f.notes}` : "",
+    info.deskNotes.length ? `${L.desk}: ${info.deskNotes.map(n => n.text).join("; ")}` : "",
+    info.lang === "en" && info.summary ? info.summary : "",   // the summary is in English: only for a call in English
+  ], limit);
+}
+async function engineNote(info, pt, limit) {
+  if (settings.ai && aiKey()) {
+    try {
+      const lang = { lt: "Lithuanian", lv: "Latvian", en: "English" }[info.lang] || "English";
+      const sys = `You write the comment a ${BIZ.words.business}'s front desk attaches to a booked ${WORDS.visit} in their scheduling system, for the ${WORDS.staffs}. Write it in ${lang}, the language the ${WORDS.client} spoke. At most ${limit} characters, plain text, short lines. Most important first: why they come, warning signs, then details that matter (where, how bad, how urgent, their wishes for time and length), then anything else the staff should know. Never mention AI, tools, phone systems or how the request came in. Reply with JSON only.`;
+      const user = JSON.stringify({ reason: info.reason, summary: info.summary, details: info.fields, warnings: info.flags, length_minutes: info.len, front_desk_notes: info.deskNotes.map(n => n.text),
+        conversation: info.transcript.slice(-40).map(x => (x.who === "caller" ? "Client: " : "Receptionist: ") + x.t), reply_as: { note: `the comment, in ${lang}, at most ${limit} characters` } });
+      const j = parseJSON(await aiCall(sys, user, 700, "note", settings.aiProvider));
+      const t = String(j.note || "").trim();
+      if (t) return t.length <= limit ? t : fitNote(t.split(/\n+/), limit);
+    } catch (e) { startLog("booking note: " + String(e.message || e).slice(0, 100)); }
+  }
+  return templateNote(info, limit);
 }
 // Books at the engine first; Frontly keeps its copy only when that worked
 async function bookAtEngine(c, pt, doc, at, why, info, dur) {
@@ -1483,16 +1518,18 @@ async function bookAtEngine(c, pt, doc, at, why, info, dur) {
   if (!sh) throw new Error(`That time is no longer in ${doc.short}'s shift in ${P.label}`);
   if (((extDiary.busy || {})[doc.id] || []).some(x => at < x.end && at + len > x.start)) throw new Error(`That time was just taken in ${P.label}. Pick another one`);
   const cl = { name: (pt && pt.name) || c.fields.name || "Caller", phone: (pt && pt.phone) || c.phone, ref: pt && pt.ext && pt.ext[id] };
-  // the whole story as the visit's note; if the engine refuses it (too long, perhaps), a shorter one, then the short line
-  const lead = [plannerCfg(id).note, why].filter(Boolean).join(": "), x = { staff: ext, start: at, end: at + len, room: sh.room || plannerCfg(id).room || "", client: cl };
-  let r, sent = 0, lastErr;
-  for (const level of [0, 1, 2]) {
-    try { r = await P.book(Object.assign({}, x, { note: lead + "\n\n" + bookingNote(info, pt, level) })); sent = level; break; }
+  // the comment: in the call's language, within what the engine keeps; if it's refused, a shorter one
+  const lead = String(plannerCfg(id).note || "").trim(), limit = Math.max(120, +plannerCfg(id).limit || 400) - (lead ? lead.length + 1 : 0);
+  const x = { staff: ext, start: at, end: at + len, room: sh.room || plannerCfg(id).room || "", client: cl };
+  const text = await engineNote(info, pt, limit);
+  let r, sent = "", lastErr;
+  for (const [kind, body] of [["full", text], ["short", fitNote(text.split("\n"), 160)]]) {
+    try { r = await P.book(Object.assign({}, x, { note: (lead ? lead + "\n" : "") + body })); sent = kind; info.engineNote = body; break; }
     catch (e) { lastErr = e; if (/busy|taken|occupied|shift|refused the API key|didn't answer/i.test(String(e.message || e))) break; }
   }
   if (!r) throw lastErr;
   await loadDiary(at, at, true);
-  return Object.assign({ planner: id, note: ["full", "shorter", "short"][sent] }, r);
+  return Object.assign({ planner: id, note: sent }, r);
 }
 
 // ---------- a client's visits, from the planning engine ----------
@@ -1667,7 +1704,7 @@ function clientState() {
     planner: { id: plannerId(), label: planner().label, can: planner().can },
     syncWith: syncEngineId() ? { id: syncEngineId(), label: PLANNERS[syncEngineId()].label } : null,
     planners: Object.entries(PLANNERS).map(([id, P]) => ({ id, label: P.label, cancels: !!P.cancel || !!P.builtin, about: P.about, help: P.help || "", docs: P.docs || "", builtin: !!P.builtin, can: P.can, secret: P.secret || "",
-      fields: (P.fields || []).map(({ k, label, type, list, help, def }) => ({ k, label, type, list, help, def })), clients: !!P.clients, inspect: !!P.inspect, cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
+      fields: (P.fields || []).map(({ k, label, type, list, help, def, options }) => ({ k, label, type, list, help, def, options })), clients: !!P.clients, inspect: !!P.inspect, cfg: P.builtin ? {} : plannerCfg(id), state: (settings.plannerState || {})[id] || null })),
     ext: extDiary && extDiary.id === plannerId() ? extDiary : null,
     importing: importView(pendingImport),
     lengths: lengths(), serviceLens: Object.fromEntries(Object.keys(SPECIALTIES).map(k => [k, serviceLen(k)])),
@@ -2322,7 +2359,7 @@ function clientApp() {
         ${st.inspect ? inspectHTML(st.inspect, P) : ""}` : ""}
       ${P.docs ? `<p class="note">The API: <a href="${esc(P.docs)}">${esc(P.docs.replace(/^https?:\/\//, ""))}</a></p>` : ""}
       ${P.fields.length ? `<h3 class="sec2">Bookings</h3>${P.fields.map(f => `<div class="cfg"><div class="cfg-h"><b>${esc(f.label)}</b></div>${f.help ? `<small class="muted">${esc(f.help)}</small>` : ""}
-        ${f.type === "select" ? `<select class="voicesel wide plancfg" data-k="${esc(f.k)}" aria-label="${esc(f.label)}"><option value="">${list(f.list).length ? "Choose" : "Test the connection to load these"}</option>${list(f.list).map(([v, l]) => `<option value="${esc(v)}" ${String(P.cfg[f.k]) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
+        ${f.type === "select" ? `<select class="voicesel wide plancfg" data-k="${esc(f.k)}" aria-label="${esc(f.label)}">${f.options ? "" : `<option value="">${list(f.list).length ? "Choose" : "Test the connection to load these"}</option>`}${(f.options || list(f.list)).map(([v, l]) => `<option value="${esc(v)}" ${String(P.cfg[f.k]) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
           : `<input class="cfgin wide plancfg" data-k="${esc(f.k)}" value="${esc(P.cfg[f.k] || "")}" aria-label="${esc(f.label)}" autocomplete="off">`}</div>`).join("")}` : ""}
       <h3 class="sec2">${esc(word("Staffs"))}</h3>
       <small class="muted">Link each ${esc(word("staff"))} to their person in ${esc(P.label)}: Frontly offers their free times from there and books them there.</small>
@@ -2358,7 +2395,7 @@ function clientApp() {
   }
   let aiOpen = false, aiArmed = null; const aiLoading = new Set();
   const PN = { anthropic: "Claude", openai: "OpenAI", elevenlabs: "ElevenLabs" };
-  const FEAT = { call: "Conversation", summary: "Call notes", plan: "Booking plans", speech: "Reva's voice", listening: "Transcription", test: "Connection tests", other: "Other" };
+  const FEAT = { call: "Conversation", summary: "Call notes", plan: "Booking plans", note: "Booking comments", speech: "Reva's voice", listening: "Transcription", test: "Connection tests", other: "Other" };
   const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n);
   function arm(key) { aiArmed = key; renderAI(); setTimeout(() => { if (aiArmed === key) { aiArmed = null; renderAI(); } }, 3500); }
   function usageBlock(p, P) {
@@ -3488,7 +3525,8 @@ function clientApp() {
     const rows = Object.entries(I.fields || {}).filter(([k]) => k !== "name").map(([k, v]) => [L[k] || k, k === "pain" ? v + "/10" : k === "urgency" ? v + "/5" : v]);
     const src = I.source === "phone" ? "📞 Real phone call" : I.source === "desk" ? "✎ Front desk" : "Call in Frontly";
     return `<div class="ainfo">
-      <p class="muted">${esc(src)}, ${esc(whenFull(I.callAt || a.made))} · booked by ${esc(I.by || a.by || "")} ${esc(dayLabel(I.at || a.made))}${P ? ` · sent to ${esc(P.label)} with ${a.ext.note === "full" ? "the whole story" : a.ext.note === "shorter" ? "a shorter note" : "a short note"}` : ""}</p>
+      <p class="muted">${esc(src)}, ${esc(whenFull(I.callAt || a.made))} · booked by ${esc(I.by || a.by || "")} ${esc(dayLabel(I.at || a.made))}${P ? ` · sent to ${esc(P.label)}` : ""}</p>
+      ${P && I.engineNote ? `<div class="sentnote"><small class="muted">The comment in ${esc(P.label)}${a.ext.note === "short" ? " (shortened: the longer one was refused)" : ""}</small><pre>${esc(I.engineNote)}</pre></div>` : ""}
       ${I.summary ? `<p class="ai-s">${I.noteBy && I.noteBy !== "desk" && I.noteBy !== "template" ? "✦ " : ""}${esc(I.summary)}</p>` : ""}
       <div class="chips">${I.len ? `<span class="pill">⏱ ${esc(fmtLen(I.len))}</span>` : ""}${I.triage ? triagePill(I.triage) : ""}${I.priority ? `<span class="pill">Priority ${esc(I.priority)}/5</span>` : ""}${I.service ? `<span class="pill">${esc(I.service)}</span>` : ""}${(I.flags || []).map(f => `<span class="pill flag">⚠ ${esc(f)}</span>`).join("")}</div>
       ${rows.length ? `<dl class="facts">${rows.map(([l, v]) => `<div><dt>${esc(l)}</dt><dd>${esc(v)}</dd></div>`).join("")}${I.mood ? `<div><dt>Mood</dt><dd>${S.moods[I.mood.label] || ""} ${esc(I.mood.label)}</dd></div>` : ""}</dl>` : ""}
@@ -4091,6 +4129,7 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 #plansheet{z-index:13}
 #impsheet{z-index:14}
 #regsheet{z-index:12}
+.sentnote pre{white-space:pre-wrap;font:inherit;font-size:calc(14px * var(--ts));margin:4px 0 0;padding:8px 10px;border-radius:10px;background:var(--paper);border:1px solid var(--rule)}
 .syncrow{display:flex;align-items:center;gap:10px;margin:12px 0 2px;padding:10px 12px;border:1px solid var(--rule);border-radius:14px;background:var(--sheet)}
 .syncrow.bad{border-color:var(--amber)}
 .sync-t{flex:1;min-width:0;display:flex;flex-direction:column}
