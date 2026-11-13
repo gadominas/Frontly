@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.12.0';
+const VERSION = '1.12.1';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -3032,7 +3032,7 @@ function clientApp() {
   }
 
   // The case: one call, as the receptionist sees it, with booking
-  let caseId = "", caseDoc = "", caseDay = 0, caseSlot = 0, caseArmed = "", caseBusy = false, showTx = false, caseMove = "", caseSug = null, casePick = 0, caseDur = 0, caseDurSug = null;
+  let caseId = "", caseDoc = "", caseDay = 0, caseSlot = 0, caseArmed = "", caseBusy = false, showTx = false, caseMove = "", caseSug = null, casePick = 0, caseDur = 0, caseDurSug = null, caseSugDoc = "";
   const fmtLen = m => m >= 60 && m % 60 === 0 ? `${m / 60} h` : m > 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
   const snapL = n => (S.lengths || [30]).reduce((b, x) => Math.abs(x - n) < Math.abs(b - n) ? x : b, (S.lengths || [30])[0]);
   // How long the visit should be: what the caller asked for, the AI's estimate, the service's usual length, the default
@@ -3115,7 +3115,9 @@ function clientApp() {
   function caseDocs(c, moveId) {
     const s = c.summary || {}, mv = moveId && ((byPatient(c.patientId) || {}).appts || []).find(a => a.id === moveId);
     const first = (mv && mv.doctor) || s.doctor, spec = (mv && specOfAppt(mv)) || s.specialty;
-    return S.doctors.filter(d => d.id === first || d.spec.includes(spec)).sort((a, b) => (b.id === first) - (a.id === first));
+    let list = S.doctors.filter(d => d.id === first || d.spec.includes(spec));
+    if (extOn() && !list.some(d => extFor(d))) list = list.concat(S.doctors.filter(d => extFor(d) && !list.includes(d)));   // someone who can be booked there
+    return list.sort((a, b) => (!!extFor(b) - !!extFor(a)) * (extOn() ? 1 : 0) || (b.id === first) - (a.id === first));
   }
   // A suggested time: what the caller asked for, the right dentist, soon (sooner the more urgent), within the rules
   function suggest(c, moveId) {
@@ -3178,6 +3180,8 @@ function clientApp() {
     const up = upcomingOf(byPatient(c.patientId));
     caseMove = c.status === "waiting" && c.intent === "change_visit" && up.length ? ((c.plan && c.plan.move) || up[0].id) : "";
     caseDoc = (c.booking && c.booking.doctor) || (c.summary && c.summary.doctor) || (S.doctors[0] || {}).id || "";
+    if (extOn() && !c.booking && !extFor(docOf(caseDoc))) { const alt = caseDocs(c, "").find(d => extFor(d)); if (alt) caseDoc = alt.id; }   // the planning service can only book linked people
+    caseSugDoc = caseDoc;
     caseDurSug = sugLen(c, caseMove); caseDur = caseDurSug.min;
     caseSug = c.status === "waiting" ? suggest(c, caseMove) : null;
     if (caseSug) useTime(caseSug.doctor, caseSug.at);
@@ -3225,12 +3229,14 @@ function clientApp() {
     const loaded = d => !extFor(doc) || (S.ext && S.ext.from <= d && S.ext.to >= d + DAY - 1);
     const dname = d => new Date(d).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
     // why a day has no times, in words
-    const why = !caseDay ? (extFor(doc) ? `No shifts for ${esc(doc.short)} in ${esc(S.planner.label)} in the coming days. Pick a date further ahead.` : extOn() ? "" : `${esc(doc.short)} has no working days set. Add them in Settings › ${esc(word("Staffs"))}.`)
+    const unlinked = extOn() && !extFor(doc);   // the note above explains; no strip, no times
+    const why = unlinked ? "" : !caseDay ? (extFor(doc) ? `No shifts for ${esc(doc.short)} in ${esc(S.planner.label)} in the coming days. Pick a date further ahead.` : extOn() ? "" : `${esc(doc.short)} has no working days set. Add them in Settings › ${esc(word("Staffs"))}.`)
       : !loaded(caseDay) ? `Loading ${esc(S.planner.label)} for ${esc(dname(caseDay))}…`
       : sl.length ? "" : extFor(doc) ? `${esc(doc.short)} has no shift in ${esc(S.planner.label)} on ${esc(dname(caseDay))}.`
       : !doc.days.includes(new Date(caseDay).getDay()) ? `${esc(doc.short)} doesn't work on ${esc(new Date(caseDay).toLocaleDateString(undefined, { weekday: "long" }))}s.`
       : sod(caseDay) === sod(Date.now()) ? "No times left today." : "No times on this day.";
-    const docs = S.doctors.slice().sort((a, b) => (b.id === s.doctor) - (a.id === s.doctor) || (b.spec.includes(s.specialty)) - (a.spec.includes(s.specialty)));
+    const sugDoc = caseSug ? caseSug.doctor : caseSugDoc || s.doctor;
+    const docs = S.doctors.slice().sort((a, b) => (extOn() ? !!extFor(b) - !!extFor(a) : 0) || (b.id === sugDoc) - (a.id === sugDoc) || (b.spec.includes(s.specialty)) - (a.spec.includes(s.specialty)));
     const ok = (d, at) => { const dd = docOf(d); return dd && slotsFor(dd, sod(at), ruleFor(c, caseMove, d)).some(x => x.at === at && usable(x)); };
     const tLabel = (d, at) => `${esc(dayLabel(at))}, ${hhmm(at)}–${hhmm(at + caseDur * 60e3)} with ${esc((docOf(d) || {}).short || "")}`;
     const pl = c.plan && (c.plan.move || "") === caseMove ? c.plan : null;
@@ -3248,14 +3254,14 @@ function clientApp() {
       ${s.hint && (!s.doctor || S.doctors.some(d => d.id === s.doctor && (!extOn() || extFor(d)))) ? `<p class="bk-hint">${s.kind === "ai" ? "✦ " : ""}${esc(s.hint)}</p>` : ""}
       ${extNote}
       <span class="lbl-s">How long</span>
-      <div class="lens" role="radiogroup" aria-label="How long">${(S.lengths || []).map(m => `<button class="chip len ${m === caseDur ? "on" : ""} ${caseDurSug && m === caseDurSug.min ? "sug" : ""}" data-act="bklen" data-v="${m}" role="radio" aria-checked="${m === caseDur}">${fmtLen(m)}</button>`).join("")}</div>
+      <div class="lens" role="radiogroup" aria-label="How long">${(S.lengths || []).map(m => `<button class="chip len ${m === caseDur ? "on" : ""} ${caseDurSug && m === caseDurSug.min ? "len-sug" : ""}" data-act="bklen" data-v="${m}" role="radio" aria-checked="${m === caseDur}">${fmtLen(m)}</button>`).join("")}</div>
       ${caseDurSug ? `<p class="note">${caseDur === caseDurSug.min ? "Suggested" : `Suggested ${fmtLen(caseDurSug.min)}`}: ${esc(caseDurSug.why)}</p>` : ""}
       <label class="lbl-s" for="bkdoc">${esc(word("Staff"))}</label>
-      <select id="bkdoc" class="voicesel bkdoc">${docs.map(d => `<option value="${esc(d.id)}" ${d.id === doc.id ? "selected" : ""}>${esc(d.name)} · ${esc(d.role)}${d.id === s.doctor ? " (suggested)" : ""}${extOn() && !extFor(d) ? ` (not in ${esc(S.planner.label)})` : ""}</option>`).join("")}</select>
-      <div class="days-row"><div class="days" role="tablist" aria-label="Day">${days.map(d => { const x = slotsFor(doc, d, rule), n = x.filter(usable).length, blocked = !n && x.some(y => y.free && y.why); return `<button class="day ${d === caseDay ? "on" : ""}" data-act="bkday" data-v="${d}" ${n ? "" : "disabled"}><small>${esc(new Date(d).toLocaleDateString(undefined, { weekday: "short" }))}</small><b>${new Date(d).getDate()}</b><i>${n ? n + " free" : blocked ? "not allowed" : !loaded(d) ? "…" : "full"}</i></button>`; }).join("")}</div>
-        <label class="dbb pickdate ${casePick && casePick === caseDay ? "on" : ""}" aria-label="Pick a date">${CAL_SVG}<span>${casePick && !workDays(doc).includes(casePick) ? esc(new Date(casePick).toLocaleDateString(undefined, { day: "numeric", month: "short" })) : "Pick a date"}</span><input type="date" class="bkdate" min="${ymdL(Date.now())}" value="${caseDay ? ymdL(caseDay) : ""}"></label></div>
-      <div class="slots">${sl.length ? sl.map(x => `<button class="slot ${x.at === caseSlot ? "on" : ""} ${usable(x) && prefOk(pf, x.at) ? "pref" : ""} ${x.free && x.why ? "rule" : ""}" data-act="bkslot" data-v="${x.at}" ${usable(x) ? "" : "disabled"} ${x.why ? `title="${esc(x.why)}"` : ""}>${hhmm(x.at)}</button>`).join("") : `<p class="muted slots-none">${why || "No times on this day."}</p>`}</div>
-      ${pf.any ? `<p class="note"><span class="pref-dot"></span> Matches what the caller asked for</p>` : ""}
+      <select id="bkdoc" class="voicesel bkdoc">${docs.map(d => `<option value="${esc(d.id)}" ${d.id === doc.id ? "selected" : ""}>${esc(d.name)} · ${esc(d.role)}${d.id === sugDoc ? " (suggested)" : ""}${extOn() && !extFor(d) ? ` (not in ${esc(S.planner.label)})` : ""}</option>`).join("")}</select>
+      ${unlinked ? "" : days.length ? `<div class="days-row"><div class="days" role="tablist" aria-label="Day">${days.map(d => { const x = slotsFor(doc, d, rule), n = x.filter(usable).length, blocked = !n && x.some(y => y.free && y.why); return `<button class="day ${d === caseDay ? "on" : ""}" data-act="bkday" data-v="${d}" ${n ? "" : "disabled"}><small>${esc(new Date(d).toLocaleDateString(undefined, { weekday: "short" }))}</small><b>${new Date(d).getDate()}</b><i>${n ? n + " free" : blocked ? "not allowed" : !loaded(d) ? "…" : "full"}</i></button>`; }).join("")}</div>
+        <label class="dbb pickdate ${casePick && casePick === caseDay ? "on" : ""}" aria-label="Pick a date">${CAL_SVG}<span>${casePick && !workDays(doc).includes(casePick) ? esc(new Date(casePick).toLocaleDateString(undefined, { day: "numeric", month: "short" })) : "Pick a date"}</span><input type="date" class="bkdate" min="${ymdL(Date.now())}" value="${caseDay ? ymdL(caseDay) : ""}"></label></div>` : `<div class="days-row"><label class="dbb pickdate wide" aria-label="Pick a date">${CAL_SVG}<span>Pick a date</span><input type="date" class="bkdate" min="${ymdL(Date.now())}" value=""></label></div>`}
+      ${unlinked ? "" : `<div class="slots">${sl.length ? sl.map(x => `<button class="slot ${x.at === caseSlot ? "on" : ""} ${usable(x) && prefOk(pf, x.at) ? "pref" : ""} ${x.free && x.why ? "rule" : ""}" data-act="bkslot" data-v="${x.at}" ${usable(x) ? "" : "disabled"} ${x.why ? `title="${esc(x.why)}"` : ""}>${hhmm(x.at)}</button>`).join("") : why ? `<p class="muted slots-none">${why}</p>` : ""}</div>`}
+      ${pf.any && sl.some(x => usable(x) && prefOk(pf, x.at)) ? `<p class="note"><span class="pref-dot"></span> Matches what the caller asked for</p>` : ""}
       ${reasons.length ? `<p class="note rule-n">Not offered: ${reasons.map(esc).join(" · ")}</p>` : ""}
       <button class="primary block" data-act="book" ${caseSlot && !caseBusy ? "" : "disabled"}>${caseBusy ? "Booking…" : caseSlot ? `${mv ? "Move to" : "Book"} ${esc(dayLabel(caseSlot))}, ${hhmm(caseSlot)}–${hhmm(caseSlot + caseDur * 60e3)} with ${esc(doc.short)}` : "Pick a time"}</button>
       <button class="ghost block danger ${caseArmed === "close" ? "armed" : ""}" data-act="caseclose" data-id="${esc(c.id)}">${caseArmed === "close" ? "Confirm: close without booking" : "Close without booking"}</button>
@@ -4135,9 +4141,9 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 .sync-t{flex:1;min-width:0;display:flex;flex-direction:column}
 .sync-t small{color:var(--muted);font-size:calc(13px * var(--ts))}
 .syncrow.bad .sync-t small{color:var(--amber)}
-.lens{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:6px -14px 4px;padding:2px 14px 4px}
-.chip.len{flex:none;font-variant-numeric:tabular-nums}
-.chip.len.sug:not(.on){border-color:var(--signal);color:var(--signal)}
+.lens{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:none;margin:6px -14px 4px;padding:2px 14px 4px}
+.chip.len,.chip.len.on{flex:none;height:36px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;padding:0 14px;line-height:1;border-width:1px;border-style:solid;font-variant-numeric:tabular-nums;-webkit-appearance:none;appearance:none}
+.chip.len.len-sug:not(.on){border-color:var(--signal);color:var(--signal)}
 .dlg{position:fixed;inset:0;z-index:40;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.45);padding:16px 12px calc(16px + env(safe-area-inset-bottom,0px))}
 .dlg.open{display:flex}
 .dlg-card{width:100%;max-width:460px;background:var(--paper);border:1px solid var(--rule);border-radius:22px;padding:18px 18px 14px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
@@ -4187,6 +4193,7 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .insp{min-height:44px;flex-direction:row;max-width:none;border-radius:999px;padding:0 14px}
 .insp-r{background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:10px 12px;margin:4px 0 10px}
 .insp-r b{display:block}
+.pickdate.wide{flex-direction:row;gap:8px;min-height:46px;max-width:none;width:100%;border-radius:14px;font-size:calc(15px * var(--ts))}
 .pickdate.on{border-color:var(--signal);color:var(--signal)}
 .pickdate input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;-webkit-appearance:none;appearance:none;border:0}
 .slot{padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--rule);background:var(--paper);font:650 calc(15px * var(--ts))/1 var(--rounded);font-variant-numeric:tabular-nums;position:relative}
