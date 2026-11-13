@@ -2,6 +2,23 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.5.2 (2026-11-13): Edit a client's details
+
+- ✏️ **Edit details**: Fix a name, a phone number or an age on the client's page. The new name shows everywhere and reaches the phone line at once.
+- 📞 **One number, one client**: Reva recognises callers by their number, so Frontly won't let two records share one, and says who already has it.
+- 🗑️ **Remove a record**: Take a record away when it's not needed; Frontly won't while a booking is ahead, and the calls stay.
+
+**Changes**
+
+- A client's page: Edit details (name, phone, age where the business asks for it), Save, Cancel, Remove; mistakes are explained and what was typed stays
+- The record's name is the name shown on cards and the case, ahead of the name said on a call
+- The phone bridge gets the patient list again after an edit or a removal
+- Tests: 16-edit-client (22 of 22 with the testkit)
+
+**Fixes**
+
+- A misspelt name from a call could only be fixed by a new call
+
 ## 1.5.1 (2026-11-13): A new logo for any front desk
 
 - 💬 **A request that becomes a booking**: The new logo is a speech bubble shaped like a calendar page, with a teal check for booked and a pink dot for a new call.

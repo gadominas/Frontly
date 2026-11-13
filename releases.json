@@ -4,6 +4,37 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.5.2",
+      "date": "2026-11-13",
+      "title": "Edit a client's details",
+      "highlights": [
+        {
+          "icon": "✏️",
+          "title": "Edit details",
+          "text": "Fix a name, a phone number or an age on the client's page. The new name shows everywhere and reaches the phone line at once."
+        },
+        {
+          "icon": "📞",
+          "title": "One number, one client",
+          "text": "Reva recognises callers by their number, so Frontly won't let two records share one, and says who already has it."
+        },
+        {
+          "icon": "🗑️",
+          "title": "Remove a record",
+          "text": "Take a record away when it's not needed; Frontly won't while a booking is ahead, and the calls stay."
+        }
+      ],
+      "changes": [
+        "A client's page: Edit details (name, phone, age where the business asks for it), Save, Cancel, Remove; mistakes are explained and what was typed stays",
+        "The record's name is the name shown on cards and the case, ahead of the name said on a call",
+        "The phone bridge gets the patient list again after an edit or a removal",
+        "Tests: 16-edit-client (22 of 22 with the testkit)"
+      ],
+      "fixes": [
+        "A misspelt name from a call could only be fixed by a new call"
+      ]
+    },
+    {
       "version": "1.5.1",
       "date": "2026-11-13",
       "title": "A new logo for any front desk",
