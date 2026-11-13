@@ -160,6 +160,10 @@ Rename any word underneath (an "employee" can be a "consultant", a "customer" a 
 
 **Settings › Dentists › Add** (the section takes your word for staff: Mechanics, Employees…): the name, a short name for cards and the calendar, the role, the services they do, the days they work and their hours. Bookings, the AI's suggestions and the calendar use them. **Edit** changes one; **Remove** takes one off (not while they have visits booked; past visits keep their name).
 
+### Correct a client's details
+
+On a client's page, **Edit details** changes the name, the phone number and the age (where the business asks for it). The number has to be the one they call from: Reva recognises callers by it, so two records can't share one. The new name shows everywhere and reaches the phone line at once. **Remove** takes the record away (not while a booking is ahead); their calls stay.
+
 ### Start empty again
 
 **Settings › Data › Remove all calls and patients** clears the front desk. Dentists and settings stay.

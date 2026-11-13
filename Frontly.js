@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.5.1';
+const VERSION = '1.5.2';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -698,6 +698,30 @@ const digits = s => String(s || "").replace(/\D/g, "");
 const samePhone = (a, b) => { const x = digits(a), y = digits(b); return x.length >= 6 && y.length >= 6 && x.slice(-8) === y.slice(-8); };
 const patientByPhone = ph => patients.find(p => samePhone(p.phone, ph));
 const firstName = n => String(n || "").trim().split(/\s+/)[0] || "";
+// A client's page › Edit: name, phone and age. The number is how callers are recognised, so two records can't share it.
+function editPatient(m) {
+  const p = patients.find(x => x.id === m.id);
+  if (!p) return "That record isn't there any more";
+  const name = String(m.name || "").trim().replace(/\s+/g, " ").slice(0, 80), phone = String(m.phone || "").trim().slice(0, 30);
+  const ageTxt = String(m.age == null ? "" : m.age).trim(), age = ageTxt === "" ? null : Math.round(Number(ageTxt));
+  if (name.length < 2) return "Add the name";
+  if (phone.replace(/\D/g, "").length < 6) return "Add a phone number with at least 6 digits";
+  if (ageTxt !== "" && !(age >= 0 && age <= 120)) return "Age: a number from 0 to 120, or leave it empty";
+  const other = patients.find(x => x !== p && samePhone(x.phone, phone));
+  if (other) return `${other.name} already has that number`;
+  p.name = name; p.phone = phone; p.age = age;
+  return "";
+}
+// A client's page › Remove: not while a booking is ahead; their calls stay, without the record
+function removePatient(id) {
+  const p = patients.find(x => x.id === id);
+  if (!p) return "";
+  const up = (p.appts || []).filter(a => a.status === "booked" && a.at > Date.now()).length;
+  if (up) return `${p.name} has ${up} ${up === 1 ? WORDS.visit : WORDS.visits} booked. Cancel ${up === 1 ? "it" : "them"} first`;
+  patients = patients.filter(x => x !== p);
+  calls.forEach(c => { if (c.patientId === id) c.patientId = null; });
+  return "";
+}
 const docById = id => ALL_DOCTORS.find(d => d.id === id);
 const FIELD_KEYS = ["name", "age", "complaint", "location", "pain", "urgency", "preferred", "notes"];
 const LANG_NAME = { en: "English", lt: "Lithuanian" };
@@ -1274,6 +1298,20 @@ async function handle(m) {
     case "desk-close": { const c = calls.find(x => x.id === m.id); if (c) { c.status = "closed"; c.closedBy = settings.deskUser; } saveWidget(widgetSnapshot()); break; }
     case "desk-reopen": { const c = calls.find(x => x.id === m.id); if (c && (c.status === "closed" || c.status === "noted")) { c.status = "waiting"; delete c.followUp; } saveWidget(widgetSnapshot()); break; }
     case "note": if (addNote(m)) { saveAll(); toast("Note added"); return push(); } return;
+    case "pat-edit": {
+      const err = editPatient(m);
+      if (err) return call("__done", m.req, false, err);
+      saveAll(); saveWidget(widgetSnapshot()); toast("Saved"); push();
+      if (lineOn()) lineReq("PUT", "/patients", patientsBrief()).catch(e => startLog("phone line: " + String(e.message || e).slice(0, 100)));
+      return call("__done", m.req, true, "");
+    }
+    case "pat-remove": {
+      const err = removePatient(m.id);
+      if (err) { toast(err); return push(); }
+      saveAll(); saveWidget(widgetSnapshot()); toast(`${cap(WORDS.client)} removed`); push();
+      if (lineOn()) lineReq("PUT", "/patients", patientsBrief()).catch(e => startLog("phone line: " + String(e.message || e).slice(0, 100)));
+      return;
+    }
     case "pat-msg": {   // a message Reva passes on when this patient next phones
       const pt = patients.find(p => p.id === m.patient), text = String(m.text || "").trim().slice(0, 500);
       if (!pt) return;
@@ -2117,7 +2155,7 @@ function clientApp() {
   const TRIAGE_L = { emergency: "Emergency", urgent: "Urgent", soon: "Soon", routine: "Routine" };
   const triagePill = t => t ? `<span class="pill tri-${esc(t)}">${TRIAGE_L[t] || esc(t)}</span>` : "";
   const initials = n => String(n || "?").trim().split(/\s+/).slice(0, 2).map(w => w.charAt(0)).join("").toUpperCase();
-  const callName = c => (c.fields && c.fields.name) || ((byPatient(c.patientId) || {}).name) || c.phone;
+  const callName = c => ((byPatient(c.patientId) || {}).name) || (c.fields && c.fields.name) || c.phone;   // the record, as edited, first
   const tabs = () => [["call", "Call"], ["desk", "Front desk"], ["patients", word("Clients")], ["cal", "Calendar"]];
   function setTab(v) {
     if (!["call", "desk", "patients", "cal"].includes(v)) return;
@@ -2432,7 +2470,7 @@ function clientApp() {
   }
 
   // Patients
-  let pq = "", patId = "", patArmed = "";
+  let pq = "", patId = "", patArmed = "", patEdit = "", patErr = "", patDraft = null;
   // Each patient's state, from their appointments and calls: what the list groups, filters and shows on the card
   function patInfo(p) {
     const now = Date.now(), appts = p.appts || [];
@@ -2632,6 +2670,18 @@ function clientApp() {
       <h3 class="sec2">Calls per day</h3>${bars(days14, "")}<p class="note"><i class="k urgent"></i> urgent or emergency · the last 14 days</p>`;
   }
 
+  const EDIT_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  // A client's page › Edit details: the form keeps what was typed if saving finds something wrong
+  function patForm(p) {
+    const d = patDraft || { name: p.name, phone: p.phone, age: p.age == null ? "" : p.age }, askAge = (S.ask || []).includes("age") || p.age != null;
+    return `<div class="dform" role="group" aria-label="Edit ${esc(p.name)}">
+      <label class="lbl-s" for="pe-name">Name</label><input id="pe-name" class="cfgin wide" value="${esc(d.name)}" autocomplete="off">
+      <label class="lbl-s" for="pe-phone">Phone</label><input id="pe-phone" class="cfgin wide" type="tel" value="${esc(d.phone)}" autocomplete="off">
+      ${askAge ? `<label class="lbl-s" for="pe-age">Age</label><input id="pe-age" class="cfgin wide" inputmode="numeric" value="${esc(d.age)}" autocomplete="off">` : ""}
+      <small class="muted">${esc(S.assistant)} recognises ${esc(word("clients"))} by their number, so it has to be the one they call from.</small>
+      ${patErr ? `<p class="err">${esc(patErr)}</p>` : ""}
+      <div class="aic-btns"><button class="sm primary" data-act="patsave" data-id="${esc(p.id)}">Save</button><button class="sm" data-act="patcancel">Cancel</button><button class="sm danger ${patArmed === "rm:" + p.id ? "armed" : ""}" data-act="patremove" data-id="${esc(p.id)}">${patArmed === "rm:" + p.id ? "Confirm" : "Remove " + esc(word("client"))}</button></div></div>`;
+  }
   function renderPat() {
     const el = $("#patsheet"), keep = el.scrollTop, p = patId && byPatient(patId);
     el.classList.toggle("open", !!p); lockBody();
@@ -2640,7 +2690,8 @@ function clientApp() {
     const past = (p.appts || []).filter(a => !up.includes(a)).sort((a, b) => b.at - a.at);
     const cl = S.calls.filter(c => c.patientId === p.id);
     el.innerHTML = `<div class="sh-head"><h2>${esc(p.name)}</h2><button class="link" data-act="patclose">Done</button></div><div class="sh-body">
-      <dl class="facts"><div><dt>Phone</dt><dd>${esc(p.phone)}</dd></div>${p.age ? `<div><dt>Age</dt><dd>${esc(p.age)}</dd></div>` : ""}<div><dt>${esc(word("Client"))} since</dt><dd>${esc(new Date(p.since).toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</dd></div></dl>
+      ${patEdit === p.id ? patForm(p) : `<dl class="facts"><div><dt>Phone</dt><dd>${esc(p.phone)}</dd></div>${p.age ? `<div><dt>Age</dt><dd>${esc(p.age)}</dd></div>` : ""}<div><dt>${esc(word("Client"))} since</dt><dd>${esc(new Date(p.since).toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</dd></div></dl>
+      <button class="dbb pe-btn" data-act="patedit" data-id="${esc(p.id)}">${EDIT_SVG}<span>Edit details</span></button>`}
       <h3 class="sec2">Coming up</h3>
       ${up.length ? up.map(a => `<div class="appt"><div class="grow"><b>${esc(dayLabel(a.at))}, ${hhmm(a.at)}</b><small>${esc(a.reason)} · ${esc((docOf(a.doctor) || {}).name || "")}</small></div><button class="sm danger ${patArmed === a.id ? "armed" : ""}" data-act="apptcancel" data-p="${esc(p.id)}" data-v="${esc(a.id)}">${patArmed === a.id ? "Confirm" : "Cancel"}</button></div>`).join("") : `<p class="muted">Nothing booked.</p>`}
       <h3 class="sec2">Message for ${esc(p.name.split(" ")[0])}</h3>
@@ -2759,8 +2810,8 @@ function clientApp() {
         break;
       }
       case "addnote": { const ta = $("#casenote"), c = byCall(id); if (ta && ta.value.trim() && c) { send("note", { call: id, patient: c.patientId, text: ta.value }); ta.value = ""; } break; }
-      case "openpat": patId = id; patArmed = ""; renderPat(); $("#patsheet").scrollTop = 0; break;
-      case "patclose": patId = ""; renderPat(); break;
+      case "openpat": patId = id; patArmed = ""; patEdit = ""; patErr = ""; patDraft = null; renderPat(); $("#patsheet").scrollTop = 0; break;
+      case "patclose": patId = ""; patEdit = ""; patErr = ""; patDraft = null; renderPat(); break;
       case "pfilter": patFilter = v; render(); break;
       case "line-sync": if (!(S.line && S.line.busy)) send("line-sync", {}); break;
       case "line-call": send("line-call", {}); break;
@@ -2775,6 +2826,18 @@ function clientApp() {
       case "patnote": { const ta = $("#patnote"); if (ta && ta.value.trim()) { send("note", { patient: id, text: ta.value }); ta.value = ""; } break; }
       case "patmsg": { const ta = $("#patmsg"); if (ta && ta.value.trim()) { send("pat-msg", { patient: id, text: ta.value }); ta.value = ""; } break; }
       case "patmsgclear": send("pat-msg", { patient: id, text: "" }); break;
+      case "patedit": patEdit = id; patErr = ""; patDraft = null; renderPat(); setTimeout(() => { const f = $("#pe-name"); if (f) f.focus(); }, 50); break;
+      case "patcancel": patEdit = ""; patErr = ""; patDraft = null; renderPat(); break;
+      case "patsave": {
+        const val = k => { const el = $("#pe-" + k); return el ? el.value : undefined; };
+        patDraft = { name: val("name"), phone: val("phone"), age: val("age") == null ? "" : val("age") };
+        send("pat-edit", { id, name: patDraft.name, phone: patDraft.phone, age: val("age") }, (ok, msg) => { if (ok) { patEdit = ""; patErr = ""; patDraft = null; } else patErr = msg || "Couldn't save"; renderPat(); });
+        break;
+      }
+      case "patremove":
+        if (patArmed === "rm:" + id) { patArmed = ""; patEdit = ""; send("pat-remove", { id }); renderPat(); }   // the page closes when the record is gone
+        else { patArmed = "rm:" + id; renderPat(); setTimeout(() => { if (patArmed === "rm:" + id) { patArmed = ""; renderPat(); } }, 3500); }
+        break;
       // settings
       case "upd-now": updNow(t); break;
       case "upd-later": updLater(); break;
@@ -3216,6 +3279,7 @@ html[data-font=serif] .sumbox p{font-family:var(--serif)}
 .svc-c{display:inline-flex;align-items:center;gap:4px;padding-right:4px}
 .svc-x{border:0;background:none;color:var(--muted);font:inherit;font-size:18px;line-height:1;width:28px;height:28px;border-radius:50%}
 .svc-add{display:flex;gap:8px;align-items:center}
+.pe-btn{margin:10px 0 2px}
 .dform{display:flex;flex-direction:column;gap:6px;background:var(--sheet);border:1px solid var(--signal);border-radius:16px;padding:12px 14px;margin:6px 0 10px}
 .dform .chips{display:flex;flex-wrap:wrap;gap:6px}
 .dhours{display:grid;grid-template-columns:auto 1fr auto 1fr;align-items:center;gap:8px}
