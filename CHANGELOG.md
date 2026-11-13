@@ -2,6 +2,21 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.5.0 (2026-11-13): Any kind of office
+
+- 🏢 **Pick your kind of business**: Settings › Business: a dental clinic, a car service, or any office. Each brings its own words, services and the questions Reva asks.
+- ✏️ **Your own words**: Call your staff mechanics, consultants or anything else, your callers customers or clients, and add the services you offer.
+- 🦷 **The dental demo, as it was**: The dental clinic keeps its questions, its safety rule and Reva's phone instructions word for word, so the phone line needs no changes.
+
+**Changes**
+
+- Templates: Dental clinic (unchanged), Car service (the problem, the car, whether it can be driven; smoke, fuel or brake safety), Office or other service (reason, urgency, best time)
+- Each template: the words for staff, callers, bookings and the place; its services and how calls are routed to them; the script's questions in English and Lithuanian; the AI's wording; the AI voice's style
+- Settings › Business: kind of business, your own words (one and many), services to add and remove, Reset; staff are moved to services that exist when the template changes
+- Every screen, the case, the calendar, the tabs and the settings use the business's words; the call details show only what the business asks
+- Reva's phone instructions follow the template with the same bridge variables; the surgery gap shows only for a dental clinic; a setting for where the business is
+- Tests: 15-business-templates (21 of 21 with the testkit), including a word-for-word check of the dental instructions; node bridge/test.mjs 14 checks
+
 ## 1.4.1 (2026-11-13): A tidier front desk bar
 
 - 🔘 **Real buttons**: Check line is now a proper button with a phone icon, and shows a spinner while it checks.
