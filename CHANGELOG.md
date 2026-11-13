@@ -2,6 +2,20 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.16.0 (2026-11-13): Cancel in ClinicCards by changing the status
+
+- 🚫 **Marked cancelled there too**: Cancelling a visit in Frontly now changes its status to cancelled in ClinicCards, and checks that it took.
+- 🧠 **Learns what works**: Frontly tries the ways ClinicCards may accept a status change, keeps the one that works, and never creates a second visit.
+- 🗓️ **The time is free again**: Visits cancelled in ClinicCards no longer block their times in Frontly.
+
+**Changes**
+
+- Cancelling: the visit is read back from ClinicCards, its status set to the cancelled one by PATCH, or PUT with the whole visit, and read again to be sure; the way that worked is remembered
+- If ClinicCards doesn't take it, Frontly's copy is still cancelled and you're told to cancel it there; the visit history says "marked cancelled in ClinicCards" or "still to cancel in ClinicCards"
+- ClinicCards settings: Cancelled status (CANCELED by default); Check the diary lists the visit statuses your account uses and a visit's fields
+- Visits cancelled in ClinicCards don't block times in the booking box
+- Tests: 32-cancel-by-status, 17 and 23 updated (37 of 37 with the testkit)
+
 ## 1.15.0 (2026-11-13): Import staff from ClinicCards
 
 - 👥 **Bring them in, linked**: Settings › Dentists › Import from ClinicCards: tick who takes bookings, and they arrive linked: no adding and linking one by one.

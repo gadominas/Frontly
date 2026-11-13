@@ -4,6 +4,36 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.16.0",
+      "date": "2026-11-13",
+      "title": "Cancel in ClinicCards by changing the status",
+      "highlights": [
+        {
+          "icon": "🚫",
+          "title": "Marked cancelled there too",
+          "text": "Cancelling a visit in Frontly now changes its status to cancelled in ClinicCards, and checks that it took."
+        },
+        {
+          "icon": "🧠",
+          "title": "Learns what works",
+          "text": "Frontly tries the ways ClinicCards may accept a status change, keeps the one that works, and never creates a second visit."
+        },
+        {
+          "icon": "🗓️",
+          "title": "The time is free again",
+          "text": "Visits cancelled in ClinicCards no longer block their times in Frontly."
+        }
+      ],
+      "changes": [
+        "Cancelling: the visit is read back from ClinicCards, its status set to the cancelled one by PATCH, or PUT with the whole visit, and read again to be sure; the way that worked is remembered",
+        "If ClinicCards doesn't take it, Frontly's copy is still cancelled and you're told to cancel it there; the visit history says \"marked cancelled in ClinicCards\" or \"still to cancel in ClinicCards\"",
+        "ClinicCards settings: Cancelled status (CANCELED by default); Check the diary lists the visit statuses your account uses and a visit's fields",
+        "Visits cancelled in ClinicCards don't block times in the booking box",
+        "Tests: 32-cancel-by-status, 17 and 23 updated (37 of 37 with the testkit)"
+      ],
+      "fixes": []
+    },
+    {
       "version": "1.15.0",
       "date": "2026-11-13",
       "title": "Import staff from ClinicCards",
