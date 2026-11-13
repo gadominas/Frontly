@@ -2,6 +2,20 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.8.0 (2026-11-13): Register someone without a call
+
+- 🧾 **Register at the desk**: Someone at the desk, or a call you took yourself: add them with their details and what they need, in one step.
+- 📅 **Straight to booking**: The request waits in To book marked Front desk and opens into the booking box with a time already suggested.
+- ➕ **A new request any time**: New request on a client's page books them again without asking their details.
+
+**Changes**
+
+- Register someone (front desk) and Add (Patients): name, phone, age where the business asks, a note, and an optional request to book: what they need, service (or let Frontly suggest), urgency 1–5, best time
+- New request on a client's page, for someone already on record
+- A front-desk request gets a note like a call's (triage, service and person), is marked ✎ Front desk on cards and in the case, and has no call to read
+- Editing and registering share the same checks: a name, a phone number of 6 digits or more that no other record has, an age from 0 to 120
+- Tests: 19-register (25 of 25 with the testkit)
+
 ## 1.7.0 (2026-11-13): Import clients and staff
 
 - 📥 **Bring your lists in**: Settings › Data › Import: a CSV file or rows copied from a spreadsheet, for clients or staff, with columns in English or Lithuanian.

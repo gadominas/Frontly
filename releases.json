@@ -4,6 +4,36 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.8.0",
+      "date": "2026-11-13",
+      "title": "Register someone without a call",
+      "highlights": [
+        {
+          "icon": "🧾",
+          "title": "Register at the desk",
+          "text": "Someone at the desk, or a call you took yourself: add them with their details and what they need, in one step."
+        },
+        {
+          "icon": "📅",
+          "title": "Straight to booking",
+          "text": "The request waits in To book marked Front desk and opens into the booking box with a time already suggested."
+        },
+        {
+          "icon": "➕",
+          "title": "A new request any time",
+          "text": "New request on a client's page books them again without asking their details."
+        }
+      ],
+      "changes": [
+        "Register someone (front desk) and Add (Patients): name, phone, age where the business asks, a note, and an optional request to book: what they need, service (or let Frontly suggest), urgency 1–5, best time",
+        "New request on a client's page, for someone already on record",
+        "A front-desk request gets a note like a call's (triage, service and person), is marked ✎ Front desk on cards and in the case, and has no call to read",
+        "Editing and registering share the same checks: a name, a phone number of 6 digits or more that no other record has, an age from 0 to 120",
+        "Tests: 19-register (25 of 25 with the testkit)"
+      ],
+      "fixes": []
+    },
+    {
       "version": "1.7.0",
       "date": "2026-11-13",
       "title": "Import clients and staff",
