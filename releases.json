@@ -4,6 +4,37 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.8.1",
+      "date": "2026-11-13",
+      "title": "What you type stays put",
+      "highlights": [
+        {
+          "icon": "⌨️",
+          "title": "No more vanishing text",
+          "text": "With the phone line on, what you typed in any field was wiped every 20 seconds. It now stays."
+        },
+        {
+          "icon": "🔇",
+          "title": "Quiet checks stay quiet",
+          "text": "The phone line and the planning diary are still checked in the background, but the screen only changes when something new arrives."
+        },
+        {
+          "icon": "📍",
+          "title": "Your place kept",
+          "text": "When a new call does arrive, the screen updates around you: your text, the field you're in and the cursor stay where they were."
+        }
+      ],
+      "changes": [
+        "The background phone-line check saves and redraws only when a call arrives or the line's status changes; its spinner shows only for Check line",
+        "The planning diary refresh redraws only when the diary is different",
+        "Every redraw keeps the fields you've edited, the focus and the cursor; a field is let go once its value is saved, and a form opened afresh starts empty",
+        "Tests: 20-background-typing, which fails on 1.8.0 (26 of 26 with the testkit)"
+      ],
+      "fixes": [
+        "With the phone line set up, text typed in any field was reset every 20 seconds"
+      ]
+    },
+    {
       "version": "1.8.0",
       "date": "2026-11-13",
       "title": "Register someone without a call",

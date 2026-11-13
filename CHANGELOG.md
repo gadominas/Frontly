@@ -2,6 +2,23 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.8.1 (2026-11-13): What you type stays put
+
+- ⌨️ **No more vanishing text**: With the phone line on, what you typed in any field was wiped every 20 seconds. It now stays.
+- 🔇 **Quiet checks stay quiet**: The phone line and the planning diary are still checked in the background, but the screen only changes when something new arrives.
+- 📍 **Your place kept**: When a new call does arrive, the screen updates around you: your text, the field you're in and the cursor stay where they were.
+
+**Changes**
+
+- The background phone-line check saves and redraws only when a call arrives or the line's status changes; its spinner shows only for Check line
+- The planning diary refresh redraws only when the diary is different
+- Every redraw keeps the fields you've edited, the focus and the cursor; a field is let go once its value is saved, and a form opened afresh starts empty
+- Tests: 20-background-typing, which fails on 1.8.0 (26 of 26 with the testkit)
+
+**Fixes**
+
+- With the phone line set up, text typed in any field was reset every 20 seconds
+
 ## 1.8.0 (2026-11-13): Register someone without a call
 
 - 🧾 **Register at the desk**: Someone at the desk, or a call you took yourself: add them with their details and what they need, in one step.
