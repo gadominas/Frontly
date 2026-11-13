@@ -4,6 +4,38 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.12.0",
+      "date": "2026-11-13",
+      "title": "ClinicCards comments in the client's language",
+      "highlights": [
+        {
+          "icon": "🇱🇹",
+          "title": "In the language of the call",
+          "text": "A call held in Lithuanian gets a Lithuanian comment in ClinicCards; Latvian and English likewise."
+        },
+        {
+          "icon": "✂️",
+          "title": "What fits, what matters",
+          "text": "ClinicCards keeps 400 characters of a comment: Frontly now writes one that fits, most important first."
+        },
+        {
+          "icon": "🧹",
+          "title": "No tool names",
+          "text": "Comments no longer mention the AI, the phone system or how the request came in."
+        }
+      ],
+      "changes": [
+        "The ClinicCards comment: the reason, warnings, pain, where, urgency, preferred time and length, then the rest, within the limit, in the call's language",
+        "With an AI key the AI writes the comment from the summary, the details and the conversation; otherwise a template with Lithuanian, Latvian or English labels",
+        "ClinicCards settings: Comment length (400, what ClinicCards keeps, or more) and an optional start for each comment; the old \"Booked by Frontly\" start is gone",
+        "Details on a visit shows the comment exactly as ClinicCards got it, next to the full conversation Frontly keeps",
+        "Tests: 23 rewritten, 26-ai-booking-comment (32 of 32 with the testkit)"
+      ],
+      "fixes": [
+        "Comments longer than 400 characters were cut off in ClinicCards, so the details and the conversation never arrived"
+      ]
+    },
+    {
       "version": "1.11.0",
       "date": "2026-11-13",
       "title": "A client's ClinicCards visits on their card",

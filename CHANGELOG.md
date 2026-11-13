@@ -2,6 +2,24 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.12.0 (2026-11-13): ClinicCards comments in the client's language
+
+- 🇱🇹 **In the language of the call**: A call held in Lithuanian gets a Lithuanian comment in ClinicCards; Latvian and English likewise.
+- ✂️ **What fits, what matters**: ClinicCards keeps 400 characters of a comment: Frontly now writes one that fits, most important first.
+- 🧹 **No tool names**: Comments no longer mention the AI, the phone system or how the request came in.
+
+**Changes**
+
+- The ClinicCards comment: the reason, warnings, pain, where, urgency, preferred time and length, then the rest, within the limit, in the call's language
+- With an AI key the AI writes the comment from the summary, the details and the conversation; otherwise a template with Lithuanian, Latvian or English labels
+- ClinicCards settings: Comment length (400, what ClinicCards keeps, or more) and an optional start for each comment; the old "Booked by Frontly" start is gone
+- Details on a visit shows the comment exactly as ClinicCards got it, next to the full conversation Frontly keeps
+- Tests: 23 rewritten, 26-ai-booking-comment (32 of 32 with the testkit)
+
+**Fixes**
+
+- Comments longer than 400 characters were cut off in ClinicCards, so the details and the conversation never arrived
+
 ## 1.11.0 (2026-11-13): A client's ClinicCards visits on their card
 
 - 🔄 **Fetched when you open the card**: With ClinicCards connected, a client's visits are fetched when you open their card, and Refresh fetches them any time.
