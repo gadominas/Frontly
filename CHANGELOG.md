@@ -2,6 +2,21 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.11.0 (2026-11-13): A client's ClinicCards visits on their card
+
+- 🔄 **Fetched when you open the card**: With ClinicCards connected, a client's visits are fetched when you open their card, and Refresh fetches them any time.
+- 🕒 **You can see when**: The card says how many visits ClinicCards has for them and when they were last fetched.
+- 🧭 **One list**: Visits booked in ClinicCards join Frontly's, marked as such; a Frontly booking that's gone from ClinicCards is marked cancelled there.
+
+**Changes**
+
+- Client's card: a ClinicCards line (count, last fetched, Refresh); fetched on opening when the last fetch is over 10 minutes old
+- The client is found by their ClinicCards id or by phone number (the one with that number, never just the first); the id is kept
+- Visits fetched a month at a time, a year back and six months ahead; only this client's are taken, and visits without a patient id are refused with a message
+- Merged by ClinicCards id or time and person; new ones added as from ClinicCards; cancelled there shows cancelled; a Frontly booking no longer there is cancelled with that reason
+- Planning engines may offer findClient() and clientVisits()
+- Tests: 25-client-visits (31 of 31 with the testkit)
+
 ## 1.10.0 (2026-11-13): How long each visit takes
 
 - ⏱️ **A length for every visit**: Choose 5 minutes to 3 hours in the booking box; Frontly suggests one and says why.
