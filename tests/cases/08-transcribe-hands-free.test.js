@@ -1,5 +1,5 @@
-// 08 Lithuanian with an OpenAI key: dictation can't, so the page records, stops by itself when the caller pauses,
-// and OpenAI transcribes. No tap between answers.
+// 08 Lithuanian with an OpenAI key: the page records, stops by itself when the caller pauses, and OpenAI transcribes.
+// No tap between answers, and never the iPhone's dictation sheet (it waits for Done; dropped in 1.17).
 const { scenario } = require(process.env.TESTKIT || '../../../app-blueprints/testkit');
 
 // A microphone that hears speech for half a second, then silence
@@ -28,13 +28,13 @@ scenario('hands-free OpenAI transcription', async (t) => {
   app.tap('[data-act="callgo"]');
 
   await app.until(() => app.$$('#callsheet .bub.caller').length === 1, 9000, 'the first answer, with no tap');
-  t.check(asked.length === 1, 'dictation was tried once, then OpenAI took over');
+  t.check(asked.length === 0, 'OpenAI transcription from the first answer: the dictation sheet never opens');
   t.check(/Ona Kazlauskaitė/.test(app.text('#callsheet .bub.caller')), 'the transcribed answer is the caller’s line');
   t.check(heard.length === 1, 'one recording went to OpenAI');
   await app.until(() => /metų/.test(app.text('#callsheet')), 4000, 'Reva asks the next question in Lithuanian');
   await app.until(() => app.win().__recStarted === 2, 6000, 'the microphone opens again by itself');
   t.check(true, 'the next answer is listened for without a tap');
-  t.check(asked.length === 1, 'dictation isn’t tried again');
+  t.check(asked.length === 0, 'and never later');
   app.tap('[data-act="hangup"]');
   await app.until(() => app.$('.c-saved'), 5000, 'the call ends');
   await t.close(app);

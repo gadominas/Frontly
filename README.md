@@ -212,7 +212,7 @@ With a key, Reva talks with Claude or OpenAI: she asks follow-ups in her own wor
 - **Your own key.** Open **Settings › AI settings**, add a [Claude](https://console.anthropic.com/settings/keys) or [OpenAI](https://platform.openai.com/api-keys) key, pick any model the key can use and tap **Test connection**. An OpenAI key also powers the AI voice and transcription, even when Claude runs the conversation.
 - **Kept safe.** The key is typed into a native iOS prompt, stored in the iOS Keychain and sent only to its own provider. The app's page never sees it.
 - **You see the cost.** **AI settings › Token usage** shows tokens per day, feature (Conversation, Call notes, Reva's voice, Transcription) and model. API use is billed by the provider, separately from any chat subscription.
-- **Optional.** Without a key Reva follows a fixed script with an iPhone voice and iPhone dictation, and the note is put together without AI. Everything else works the same.
+- **Optional.** Without a key Reva follows a fixed script with an iPhone voice and speech recognition, and the note is put together without AI. Everything else works the same.
 
 ## Settings
 
@@ -245,16 +245,16 @@ Frontly checks this repository for a new version each time it opens. When one is
 
 ## How it works
 
-Frontly is one Scriptable script. Its interface is a web page in a `WebView`; the page and the script talk through a `frontly://` bridge. Reva's iPhone voice is the page's Web Speech API; her AI voice is an MP3 from OpenAI's speech endpoint played on the page. iPhone dictation is Scriptable's native `Dictation`; OpenAI transcription records on the page and the script sends the audio to OpenAI. Each answer goes to `aiCall()`, which asks Claude or OpenAI for Reva's next line as JSON (what to say, what she has learned, the caller's mood, whether she's done). Without a key, the same questions come from a fixed script. The tests run the real script in Node with the [testkit](https://github.com/gadominas/app-blueprints/tree/main/testkit); see [docs/TESTING.md](docs/TESTING.md).
+Frontly is one Scriptable script. Its interface is a web page in a `WebView`; the page and the script talk through a `frontly://` bridge. Reva's iPhone voice is the page's Web Speech API; her AI voice is an MP3 from OpenAI's speech endpoint played on the page. speech recognition is Scriptable's native `Dictation`; OpenAI transcription records on the page and the script sends the audio to OpenAI. Each answer goes to `aiCall()`, which asks Claude or OpenAI for Reva's next line as JSON (what to say, what she has learned, the caller's mood, whether she's done). Without a key, the same questions come from a fixed script. The tests run the real script in Node with the [testkit](https://github.com/gadominas/app-blueprints/tree/main/testkit); see [docs/TESTING.md](docs/TESTING.md).
 
 ## Troubleshooting
 
 | Problem | Try this |
 | --- | --- |
 | Reva doesn't make a sound | Check the volume; Frontly plays with the Ring/Silent switch on. With the AI voice, check the OpenAI key in AI settings |
-| The microphone doesn't open | Turn on Dictation in iOS Settings › General › Keyboard, or tap **Type**. iPhone dictation has no Lithuanian: add an OpenAI key and Reva transcribes you instead |
+| The microphone doesn't open | Turn on Dictation in iOS Settings › General › Keyboard, or tap **Type**. speech recognition has no Lithuanian: add an OpenAI key and Reva transcribes you instead |
 | Reva stops listening too soon, or waits too long | **Settings › Calls › Stop listening after a pause of** (OpenAI transcription) |
-| OpenAI transcription switches to iPhone dictation | Scriptable's page couldn't use the microphone on this iPhone; dictation takes over |
+| OpenAI transcription switches to speech recognition | Scriptable's page couldn't use the microphone on this iPhone; dictation takes over |
 | "AI didn't answer, so Reva carries on with her script" | The provider didn't reply in time or refused the key; the call goes on without AI. Test the key in AI settings |
 | The front desk is empty | Make a call on the Call tab, or wait for a real one |
 | Booking says "No dentists yet" | **Settings › Dentists › Add** |

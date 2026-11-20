@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.16.0';
+const VERSION = '1.17.0';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -446,7 +446,7 @@ async function loadData() {
 const settings = Object.assign(
   { ai: true, aiProvider: "anthropic", lastSession: 0,
     checkUpdates: true,   // offer new versions from GitHub (asks again 2 days after "Later")
-    lang: "en", sttEngine: "dictation", speechEngine: "ai", handsFree: true,   // the call: language, how Reva hears and speaks
+    lang: "en", sttEngine: "auto", speechEngine: "ai", handsFree: true,   // the call: language, how Reva hears and speaks
     ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsInstructions: "", voiceURI: "",
     deskUser: "", tab: "call", callFrom: "", patGroup: "status",
     bridgeUrl: "", lineSince: 0, linePhone: "", lineLast: null,   // the real phone line (bridge/), when set up
@@ -1785,7 +1785,7 @@ function clientState() {
     cfgSchema: CONFIG.map(([title, items]) => ({ title, items })),
     settings: {
       ai: settings.ai, aiProvider: settings.aiProvider, hasKey: !!aiKey(), hasOpenAI: !!keyFor("openai"), checkUpdates: settings.checkUpdates !== false,
-      lang: settings.lang === "lt" ? "lt" : "en", sttEngine: settings.sttEngine || "dictation", speechEngine: settings.speechEngine || "ai", handsFree: settings.handsFree !== false,
+      lang: settings.lang === "lt" ? "lt" : "en", sttEngine: ["openai", "device"].includes(settings.sttEngine) ? settings.sttEngine : "auto", noDevice: settings.noDevice || {}, speechEngine: settings.speechEngine || "ai", handsFree: settings.handsFree !== false,
       ttsModel: settings.ttsModel || "gpt-4o-mini-tts", ttsVoice: settings.ttsVoice || "coral", ttsInstructions: settings.ttsInstructions || "", ttsDefaultInstr: TTS_DEFAULT_INSTR(), voiceURI: settings.voiceURI || "", noDictation: settings.noDictation || {},
       deskUser: settings.deskUser || "", tab: settings.tab || "call", callFrom: settings.callFrom || "", patGroup: settings.patGroup || "status",
       theme: settings.theme, density: settings.density, font: settings.font, textSize: settings.textSize,
@@ -1832,19 +1832,11 @@ async function handle(m) {
       if (out.fellBack) toast("AI didn't answer, so Reva carries on with her script (no AI)");
       return call("onReva", m.id, out);
     }
-    case "listen": {   // iPhone dictation: the native dictation screen, then the words back to the page
-      let text = "", err = "";
-      const lang = settings.lang === "lt" ? "lt" : "en";
-      try { text = String(await Dictation.start(lang === "lt" ? "lt-LT" : "en-US") || "").trim(); }
-      catch (e) { err = String(e.message || e); }
-      // iOS has no dictation for some languages (Lithuanian, 2026): remember it, so later answers go another way
-      if (/not supported/i.test(err)) {
-        settings.noDictation = Object.assign({}, settings.noDictation, { [lang]: true }); saveAll();
-        startLog(`iPhone dictation doesn't support ${lang}: ${err.slice(0, 80)}`);
-        await push();
-        return call("onHeard", m.id, "", "unsupported");
-      }
-      return call("onHeard", m.id, text, err);
+    case "no-device": {   // the iPhone's speech recognition has no such language: remembered, so the next answer goes another way
+      const lang = m.lang === "lt" ? "lt" : "en";
+      settings.noDevice = Object.assign({}, settings.noDevice, { [lang]: true }); saveAll();
+      startLog(`speech recognition on this iPhone has no ${lang}: ${String(m.why || "").slice(0, 60)}`);
+      return push();
     }
     case "rec-done": {   // OpenAI transcription of what the page recorded
       let text = "", err = "";
@@ -2292,7 +2284,7 @@ function clientApp() {
   const LEGACY_TTS = new Set(["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"]);
   function voiceHTML() {
     const st = S.settings;
-    if (!st.hasOpenAI) return `<div class="srow"><div class="grow"><b>Reva's voice</b><small class="muted wrap">An iPhone voice. Add an OpenAI key in AI settings for a natural AI voice and transcription.</small></div></div>${deviceVoiceHTML()}${dictationOk() ? "" : `<div class="srow"><div class="grow"><b>How Reva hears you</b><small class="muted wrap">You type: iPhone dictation has no ${LANG_L[st.lang]}. An OpenAI key lets Reva transcribe you.</small></div></div>`}`;
+    if (!st.hasOpenAI) return `<div class="srow"><div class="grow"><b>Reva's voice</b><small class="muted wrap">An iPhone voice. Add an OpenAI key in AI settings for a natural AI voice and transcription.</small></div></div>${deviceVoiceHTML()}${earsHTML()}`;
     let html = `<div class="lk-row"><span class="lk-l">Reva's voice</span>${vseg("speechEngine", [["ai", "AI voice"], ["device", "iPhone voice"]])}</div>`;
     if (st.speechEngine === "ai") {
       const tm = (S.ttsModels && S.ttsModels.list) || [];
@@ -2304,9 +2296,18 @@ function clientApp() {
         ${legacy ? "" : `<textarea class="cfgin wide ttsinstr" rows="3" placeholder="${esc(st.ttsDefaultInstr)}" aria-label="How Reva sounds">${esc(st.ttsInstructions)}</textarea><small class="muted wrap">How Reva sounds. Empty uses the default above.</small>`}
         <button class="sm" data-act="voicetest">Hear Reva</button></div>`;
     } else html += deviceVoiceHTML();
-    html += dictationOk() ? `<div class="lk-row"><span class="lk-l">How Reva hears you</span>${vseg("sttEngine", [["dictation", "iPhone dictation"], ["openai", "OpenAI transcription"]])}</div>`
-      : `<div class="srow"><div class="grow"><b>How Reva hears you</b><small class="muted wrap">OpenAI transcription: iPhone dictation has no ${LANG_L[st.lang]}.</small></div></div>`;
+    html += earsHTML();
     return html;
+  }
+  // How Reva hears you: both ways stop by themselves after a pause, no button and no sheet
+  function earsHTML() {
+    const st = S.settings, ai = st.hasOpenAI && canRecord(), dev = deviceOk(), mode = earsMode();
+    const now = { openai: "OpenAI transcription", device: "speech recognition on this iPhone", type: "typing" }[mode];
+    const opts = [["auto", "Automatic"]].concat(ai ? [["openai", "OpenAI"]] : [], dev ? [["device", "This iPhone"]] : []);
+    return `<div class="srow col"><b>How Reva hears you</b><small class="muted wrap">${mode === "type"
+      ? `You type: ${SR ? `this iPhone can't recognise ${LANG_L[st.lang]} speech` : "this iPhone can't recognise speech here"}.${st.hasOpenAI ? "" : " An OpenAI key lets Reva transcribe you."}`
+      : `Now: ${now}. You just talk; your answer goes after a pause (${S.cfg.silenceStop || 1.2} s, set under Advanced). No button to press.`}</small>
+      ${opts.length > 2 ? `<div class="lk-row">${vseg("sttEngine", opts)}</div>` : ""}</div>`;
   }
   function deviceVoiceHTML() {
     const lang = S.settings.lang === "lt" ? "lt" : "en";
@@ -2852,9 +2853,19 @@ function clientApp() {
   const FIELD_ROWS_ALL = ["name", "age", "complaint", "location", "pain", "urgency", "preferred", "notes"];
   const fieldRows = (f) => FIELD_ROWS_ALL.filter(k => (S.ask || FIELD_ROWS_ALL).includes(k) || (f && f[k] != null && f[k] !== "")).map(k => [k, (S.fieldLabels || {})[k] || k]);
   const canRecord = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
-  // iPhone dictation, unless this language has none on the iPhone: then OpenAI transcription, or typing without an OpenAI key
-  const dictationOk = () => !(S.settings.noDictation || {})[S.settings.lang];
-  const sttAI = () => S.settings.hasOpenAI && (S.settings.sttEngine === "openai" || !dictationOk());
+  // How Reva hears you, never with a sheet to close: OpenAI transcription (records, stops after a pause), or the page's
+  // own speech recognition on this iPhone (words as you speak, stops after a pause), or typing when neither can.
+  // (iPhone dictation was dropped in 1.17: its sheet waits for Done after every answer.)
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const deviceOk = () => !!SR && !(S.settings.noDevice || {})[S.settings.lang];
+  const dictationOk = deviceOk;
+  function earsMode() {
+    const ai = S.settings.hasOpenAI && canRecord(), pref = S.settings.sttEngine;
+    if (pref === "device" && deviceOk()) return "device";
+    if (pref === "openai" && ai) return "openai";
+    return ai ? "openai" : deviceOk() ? "device" : "type";
+  }
+  const sttAI = () => earsMode() === "openai";
   const LANG_L = { en: "English", lt: "Lithuanian" };
   function typeInstead(why) {
     K.phase = "idle"; K.typing = true; K.focusType = true; renderCall();
@@ -2894,10 +2905,41 @@ function clientApp() {
   function listen() {
     if (!K.on || !K.id || ["think", "listen", "ending", "saved"].includes(K.phase)) return;
     stopVoice();
-    if (sttAI() && canRecord()) return startRecording();
-    if (!dictationOk()) return typeInstead(`iPhone dictation has no ${LANG_L[S.settings.lang]}, so type your answer.${S.settings.hasOpenAI ? "" : " An OpenAI key lets Reva transcribe you instead."}`);
-    K.phase = "listen"; K.rec = null; renderCall();
-    send("listen", { id: K.id });
+    const mode = earsMode();
+    if (mode === "openai") return startRecording();
+    if (mode === "device") return startDevice();
+    return typeInstead(`${SR ? `This iPhone can't recognise ${LANG_L[S.settings.lang]} speech` : "This iPhone can't recognise speech here"}, so type your answer.${S.settings.hasOpenAI ? "" : " An OpenAI key lets Reva transcribe you instead."}`);
+  }
+  // The page's own speech recognition: your words appear as you speak, and the answer goes after a pause, no button
+  function startDevice() {
+    let r;
+    try { r = new SR(); } catch (e) { return typeInstead("Speech recognition didn't start, so type your answer."); }
+    const lang = S.settings.lang === "lt" ? "lt" : "en", pause = (S.cfg.silenceStop || 1.2) * 1000;
+    K.phase = "listen"; K.rec = null; K.sr = r; K.heard = ""; K.srErr = ""; renderCall();
+    r.lang = lang === "lt" ? "lt-LT" : "en-US"; r.interimResults = true; r.continuous = true; r.maxAlternatives = 1;
+    let quiet = null, nothing = setTimeout(() => { try { r.stop(); } catch (e) {} }, 10000);   // nothing said in 10 s: stop
+    r.onresult = e => {
+      let txt = ""; for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
+      K.heard = txt.trim(); const h = document.querySelector(".c-heard"); if (h) h.textContent = K.heard; else renderCall();
+      clearTimeout(nothing); clearTimeout(quiet); quiet = setTimeout(() => { try { r.stop(); } catch (e) {} }, pause);   // a pause: done
+    };
+    r.onerror = e => { K.srErr = (e && e.error) || "error"; };
+    r.onend = () => {
+      clearTimeout(quiet); clearTimeout(nothing);
+      if (K.sr !== r) return;   // hung up or interrupted
+      K.sr = null;
+      const text = (K.heard || "").trim(), err = K.srErr;
+      K.heard = "";
+      if (!text && /language-not-supported|service-not-allowed/.test(err)) {   // no such language here: remember, go another way
+        send("no-device", { lang, why: err }); S.settings.noDevice = Object.assign({}, S.settings.noDevice, { [lang]: true });
+        K.phase = "idle";
+        if (S.settings.hasOpenAI && canRecord()) { toast(`This iPhone can't recognise ${LANG_L[lang]} speech, so OpenAI transcribes you instead`); return startRecording(); }
+        return typeInstead(`This iPhone can't recognise ${LANG_L[lang]} speech, so type your answer.${S.settings.hasOpenAI ? "" : " An OpenAI key lets Reva transcribe you instead."}`);
+      }
+      if (!text) { K.phase = "idle"; renderCall(); toast(err === "not-allowed" ? "Frontly may not use the microphone: allow it in the iPhone's Settings, or type" : "Didn't catch that. Tap the microphone or type."); return; }
+      K.phase = "idle"; callerSays(text);
+    };
+    try { r.start(); } catch (e) { K.sr = null; return typeInstead("Speech recognition didn't start, so type your answer."); }
   }
   window.onHeard = (id, text, err) => {
     // Dictation's answer counts while listening; a transcription's while it's being turned into text
@@ -2985,6 +3027,7 @@ function clientApp() {
     } catch (e) { return false; }
   }
   function stopRecording(drop) {
+    if (K.sr) { const sr = K.sr; if (drop) { K.sr = null; try { sr.abort(); } catch (e) {} } else try { sr.stop(); } catch (e) {} }   // the page's own recognition
     const r = K.rec;
     if (!r || !r.mr) return;
     if (drop) r.drop = true;
@@ -3015,7 +3058,7 @@ function clientApp() {
   const PHONE_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 3.5h2.6l1.4 4.1-2 1.4a12.5 12.5 0 0 0 6.4 6.4l1.4-2 4.1 1.4v2.6c0 1-.8 1.8-1.8 1.8A16.2 16.2 0 0 1 4.8 5.3c0-1 .8-1.8 1.8-1.8z"/></svg>`;
   function phaseText() {
     const a = S.assistant;
-    return { ring: "Calling…", reva: `${a} is speaking`, idle: "Your turn to answer", listen: K.rec ? (K.rec.live ? (K.rec.auto ? "Listening. Just stop talking when you're done" : "Recording. Tap when you're done") : "Opening the microphone…") : "Listening…",
+    return { ring: "Calling…", reva: `${a} is speaking`, idle: "Your turn to answer", listen: K.rec ? (K.rec.live ? (K.rec.auto ? "Listening. Just stop talking when you're done" : "Recording. Tap when you're done") : "Opening the microphone…") : K.sr ? "Listening. Just stop talking when you're done" : "Listening…",
       think: K.transcribing ? "Turning your answer into text…" : `${a} is thinking…`, ending: "Writing the note for the front desk…", saved: "Call ended" }[K.phase] || "";
   }
   function micBtn() {
@@ -3064,6 +3107,7 @@ function clientApp() {
         <div class="grow"><b>${esc(S.clinic)}</b><small>${esc(a)} · virtual receptionist${K.engine === "ai" ? ` · ✦ AI by ${PN[K.provider] || "AI"}` : K.engine ? " · script, no AI" : ""}</small></div>
         <span id="ctime" class="c-time">${saved ? mmss(K.dur || 0) : mmss((Date.now() - K.at) / 1000)}</span></div>
       <div class="c-phase" role="status" aria-live="polite">${K.phase === "reva" ? `<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>` : ["think", "ending", "ring"].includes(K.phase) ? `<span class="busy-dot"></span>` : ""}${esc(phaseText())}</div>
+      ${K.sr ? `<p class="c-heard" aria-live="polite">${esc(K.heard || "")}</p>` : ""}
       <div class="c-body">
         <div class="c-log">${K.lines.map(l => `<p class="bub ${l.who}">${esc(l.t)}</p>`).join("") || `<p class="c-empty">Ringing ${esc(S.clinic)}…</p>`}</div>
         ${saved ? savedHTML() : intakeHTML()}
@@ -3115,7 +3159,7 @@ function clientApp() {
     if (!newNumber) newNumber = !isKnown && cur ? cur : "+370 6" + String(Math.floor(1e6 + Math.random() * 8.9e6)).slice(0, 2) + " " + String(Math.floor(10000 + Math.random() * 89999));
     const sel = isKnown ? cur : "new";
     const recent = S.calls.slice(0, 5);
-    const voice = aiTTS() ? "AI voice" : "iPhone voice", ears = sttAI() ? "OpenAI transcription" : dictationOk() ? "iPhone dictation" : "typing";
+    const voice = aiTTS() ? "AI voice" : "iPhone voice", ears = { openai: "OpenAI transcription", device: "speech recognition on this iPhone", type: "typing" }[earsMode()];
     return `<section class="hero">
       <h2 class="hero-h">Ring ${esc(S.clinic)}</h2>
       <p class="hero-p">${esc(S.assistant)}, the virtual receptionist, picks up, asks what's wrong, how much it hurts and when you can come, then leaves a note the front desk can book from.</p>
@@ -3876,7 +3920,7 @@ function clientApp() {
       }
       // the call
       case "mic":
-        if (K.rec && K.rec.live) stopRecording(false);
+        if ((K.rec && K.rec.live) || K.sr) stopRecording(false);
         else if (K.phase === "reva" || K.phase === "idle") listen();
         break;
       case "ctype": K.typing = !K.typing; K.focusType = K.typing; renderCall(); break;
@@ -4363,6 +4407,7 @@ body.calling #toast{bottom:calc(env(safe-area-inset-bottom) + 140px)}
 #plansheet{z-index:13}
 #impsheet{z-index:14}
 #regsheet{z-index:12}
+.c-heard{min-height:1.4em;margin:6px 16px 0;text-align:center;color:var(--ink);font-size:calc(17px * var(--ts));font-style:italic}
 #stfsheet{z-index:15}
 .stflist{display:flex;flex-direction:column;gap:8px;margin:10px 0 14px}
 .stf{border:1px solid var(--rule);border-radius:14px;padding:10px 12px;background:var(--sheet);display:flex;flex-direction:column;gap:6px}
