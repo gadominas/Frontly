@@ -22,7 +22,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.17.0';
+const VERSION = '1.17.1';
 const APP_ID = 'frontly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Frontly/main/';
 const SCRIPT_FILE = 'Frontly.js';   // the script's file name in the repository
@@ -1785,7 +1785,7 @@ function clientState() {
     cfgSchema: CONFIG.map(([title, items]) => ({ title, items })),
     settings: {
       ai: settings.ai, aiProvider: settings.aiProvider, hasKey: !!aiKey(), hasOpenAI: !!keyFor("openai"), checkUpdates: settings.checkUpdates !== false,
-      lang: settings.lang === "lt" ? "lt" : "en", sttEngine: ["openai", "device"].includes(settings.sttEngine) ? settings.sttEngine : "auto", noDevice: settings.noDevice || {}, speechEngine: settings.speechEngine || "ai", handsFree: settings.handsFree !== false,
+      lang: settings.lang === "lt" ? "lt" : "en", sttEngine: ["openai", "device"].includes(settings.sttEngine) ? settings.sttEngine : "auto", noDevice: settings.noDevice || {}, noDictation: settings.noDictation || {}, speechEngine: settings.speechEngine || "ai", handsFree: settings.handsFree !== false,
       ttsModel: settings.ttsModel || "gpt-4o-mini-tts", ttsVoice: settings.ttsVoice || "coral", ttsInstructions: settings.ttsInstructions || "", ttsDefaultInstr: TTS_DEFAULT_INSTR(), voiceURI: settings.voiceURI || "", noDictation: settings.noDictation || {},
       deskUser: settings.deskUser || "", tab: settings.tab || "call", callFrom: settings.callFrom || "", patGroup: settings.patGroup || "status",
       theme: settings.theme, density: settings.density, font: settings.font, textSize: settings.textSize,
@@ -1831,6 +1831,18 @@ async function handle(m) {
       const out = await callTurn(c, text);
       if (out.fellBack) toast("AI didn't answer, so Reva carries on with her script (no AI)");
       return call("onReva", m.id, out);
+    }
+    case "listen": {   // the last resort: iPhone dictation's sheet (it waits for Done), when the page can't listen
+      let text = "", err = "";
+      const lang = settings.lang === "lt" ? "lt" : "en";
+      try { text = String(await Dictation.start(lang === "lt" ? "lt-LT" : "en-US") || "").trim(); }
+      catch (e) { err = String(e.message || e); }
+      if (/not supported/i.test(err)) {   // no dictation for this language (Lithuanian, 2026): remembered
+        settings.noDictation = Object.assign({}, settings.noDictation, { [lang]: true }); saveAll();
+        await push();
+        return call("onHeard", m.id, "", "unsupported");
+      }
+      return call("onHeard", m.id, text, err);
     }
     case "no-device": {   // the iPhone's speech recognition has no such language: remembered, so the next answer goes another way
       const lang = m.lang === "lt" ? "lt" : "en";
@@ -2206,6 +2218,10 @@ async function handle(m) {
 // looked as if nothing happened, once the idle line checks stopped redrawing every 20 seconds (1.8.1).
 const REDRAW = new Set(["desk-close", "desk-reopen", "review", "review-all", "call-remove"]);
 
+// The page's own address. A page loaded without one is about:blank, which isn't a secure context: iOS then gives it
+// no microphone (navigator.mediaDevices is missing), so neither OpenAI transcription nor speech recognition could
+// listen. Loading it at this https address fixes that; navigations to it are let through below.
+const PAGE_BASE = "https://localhost/";
 function buildWebView() {
   wv = new WebView();
   wv.shouldAllowRequest = req => {
@@ -2216,6 +2232,7 @@ function buildWebView() {
       handle(m).catch(e => toast(String(e.message || e)));
       return false;
     }
+    if (u.startsWith(PAGE_BASE)) return true;   // the page itself (and its #anchors)
     if (/^https?:/i.test(u)) { Safari.openInApp(u, false); return false; }
     return true;
   };
@@ -2302,9 +2319,12 @@ function clientApp() {
   // How Reva hears you: both ways stop by themselves after a pause, no button and no sheet
   function earsHTML() {
     const st = S.settings, ai = st.hasOpenAI && canRecord(), dev = deviceOk(), mode = earsMode();
-    const now = { openai: "OpenAI transcription", device: "speech recognition on this iPhone", type: "typing" }[mode];
+    const now = { openai: "OpenAI transcription", device: "speech recognition on this iPhone", sheet: "iPhone dictation, which needs Done after each answer", type: "typing" }[mode];
     const opts = [["auto", "Automatic"]].concat(ai ? [["openai", "OpenAI"]] : [], dev ? [["device", "This iPhone"]] : []);
-    return `<div class="srow col"><b>How Reva hears you</b><small class="muted wrap">${mode === "type"
+    const why = micWhy();
+    return `<div class="srow col"><b>How Reva hears you</b><small class="muted wrap">${mode === "sheet"
+      ? `Now: ${now}: Frontly's page can't use the microphone (${why || "no recogniser"}).${st.hasOpenAI ? "" : " An OpenAI key lets Reva transcribe you hands-free once it can."}`
+      : mode === "type"
       ? `You type: ${SR ? `this iPhone can't recognise ${LANG_L[st.lang]} speech` : "this iPhone can't recognise speech here"}.${st.hasOpenAI ? "" : " An OpenAI key lets Reva transcribe you."}`
       : `Now: ${now}. You just talk; your answer goes after a pause (${S.cfg.silenceStop || 1.2} s, set under Advanced). No button to press.`}</small>
       ${opts.length > 2 ? `<div class="lk-row">${vseg("sttEngine", opts)}</div>` : ""}</div>`;
@@ -2858,12 +2878,15 @@ function clientApp() {
   // (iPhone dictation was dropped in 1.17: its sheet waits for Done after every answer.)
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const deviceOk = () => !!SR && !(S.settings.noDevice || {})[S.settings.lang];
+  const sheetOk = () => !(S.settings.noDictation || {})[S.settings.lang];   // iPhone dictation, the last resort
   const dictationOk = deviceOk;
+  // What the page can use to hear, said plainly (Settings shows it, so a missing piece is easy to spot)
+  const micWhy = () => window.isSecureContext === false ? "the page isn't at a secure address" : !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia ? "iOS gives this page no microphone" : !window.MediaRecorder ? "this iOS can't record in the page" : "";
   function earsMode() {
     const ai = S.settings.hasOpenAI && canRecord(), pref = S.settings.sttEngine;
     if (pref === "device" && deviceOk()) return "device";
     if (pref === "openai" && ai) return "openai";
-    return ai ? "openai" : deviceOk() ? "device" : "type";
+    return ai ? "openai" : deviceOk() ? "device" : sheetOk() ? "sheet" : "type";
   }
   const sttAI = () => earsMode() === "openai";
   const LANG_L = { en: "English", lt: "Lithuanian" };
@@ -2908,6 +2931,11 @@ function clientApp() {
     const mode = earsMode();
     if (mode === "openai") return startRecording();
     if (mode === "device") return startDevice();
+    if (mode === "sheet") {   // the page can't listen: iPhone dictation, which needs Done
+      if (!K.sheetHint) { K.sheetHint = true; toast(`Frontly's page can't use the microphone (${micWhy() || "no recogniser"}), so iPhone dictation opens: tap Done when you've finished`); }
+      K.phase = "listen"; K.rec = null; renderCall();
+      return send("listen", { id: K.id });
+    }
     return typeInstead(`${SR ? `This iPhone can't recognise ${LANG_L[S.settings.lang]} speech` : "This iPhone can't recognise speech here"}, so type your answer.${S.settings.hasOpenAI ? "" : " An OpenAI key lets Reva transcribe you instead."}`);
   }
   // The page's own speech recognition: your words appear as you speak, and the answer goes after a pause, no button
@@ -3159,7 +3187,7 @@ function clientApp() {
     if (!newNumber) newNumber = !isKnown && cur ? cur : "+370 6" + String(Math.floor(1e6 + Math.random() * 8.9e6)).slice(0, 2) + " " + String(Math.floor(10000 + Math.random() * 89999));
     const sel = isKnown ? cur : "new";
     const recent = S.calls.slice(0, 5);
-    const voice = aiTTS() ? "AI voice" : "iPhone voice", ears = { openai: "OpenAI transcription", device: "speech recognition on this iPhone", type: "typing" }[earsMode()];
+    const voice = aiTTS() ? "AI voice" : "iPhone voice", ears = { openai: "OpenAI transcription", device: "speech recognition on this iPhone", sheet: "iPhone dictation (tap Done)", type: "typing" }[earsMode()];
     return `<section class="hero">
       <h2 class="hero-h">Ring ${esc(S.clinic)}</h2>
       <p class="hero-p">${esc(S.assistant)}, the virtual receptionist, picks up, asks what's wrong, how much it hurts and when you can come, then leaves a note the front desk can book from.</p>
@@ -5232,12 +5260,12 @@ async function main() {
   buildWebView();
   // A page built before its window is on screen can stay black on some iPhones (the page runs, nothing is drawn).
   // So: show an empty dark window first, then build the real page inside it while it's visible.
-  await wv.loadHTML('<html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0;background:#0E1116"></body></html>');
+  await wv.loadHTML('<html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0;background:#0E1116"></body></html>', PAGE_BASE);
   const presented = wv.present(true);
   holdLock();
   await pause(300);                          // let the window finish appearing
   startLog("window on screen");
-  await Promise.race([wv.loadHTML(buildHTML()), pause(15000)]);   // the launch screen, drawn on screen
+  await Promise.race([wv.loadHTML(buildHTML(), PAGE_BASE), pause(15000)]);   // the launch screen, drawn on screen
   let closed = false;
   presented.then(() => { closed = true; releaseLock(); });
   bootApp(() => closed).catch(e => {         // runs beside the window: closing it never waits on this
