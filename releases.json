@@ -4,6 +4,38 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.17.0",
+      "date": "2026-11-20",
+      "title": "Just talk: no dictation sheet",
+      "highlights": [
+        {
+          "icon": "🎙️",
+          "title": "No Done to press",
+          "text": "The iPhone dictation sheet is gone from calls. You talk, pause, and your answer goes by itself."
+        },
+        {
+          "icon": "✨",
+          "title": "OpenAI or this iPhone",
+          "text": "With an OpenAI key, OpenAI transcribes you (Lithuanian too). Without one, the iPhone's own speech recognition listens in the page and shows your words as you say them."
+        },
+        {
+          "icon": "⏸️",
+          "title": "Your pause, your pace",
+          "text": "How long a pause ends an answer is set under Settings › Advanced (Stop listening after a pause of)."
+        }
+      ],
+      "changes": [
+        "How Reva hears you: Automatic (OpenAI transcription with a key, otherwise this iPhone), OpenAI, or This iPhone; iPhone dictation removed",
+        "Speech recognition in the page: words shown live on the call screen, the answer sent after the pause, nothing heard in 10 s ends the turn",
+        "A language this iPhone can't recognise is remembered; OpenAI transcribes instead, or you type",
+        "Earlier \"iPhone dictation\" settings become Automatic",
+        "Tests: 07 rewritten, 08 updated (37 of 37 with the testkit)"
+      ],
+      "fixes": [
+        "Every answer in a call opened the iPhone dictation sheet, which waited for Done"
+      ]
+    },
+    {
       "version": "1.16.0",
       "date": "2026-11-13",
       "title": "Cancel in ClinicCards by changing the status",

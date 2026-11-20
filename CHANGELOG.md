@@ -2,6 +2,24 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.17.0 (2026-11-20): Just talk: no dictation sheet
+
+- 🎙️ **No Done to press**: The iPhone dictation sheet is gone from calls. You talk, pause, and your answer goes by itself.
+- ✨ **OpenAI or this iPhone**: With an OpenAI key, OpenAI transcribes you (Lithuanian too). Without one, the iPhone's own speech recognition listens in the page and shows your words as you say them.
+- ⏸️ **Your pause, your pace**: How long a pause ends an answer is set under Settings › Advanced (Stop listening after a pause of).
+
+**Changes**
+
+- How Reva hears you: Automatic (OpenAI transcription with a key, otherwise this iPhone), OpenAI, or This iPhone; iPhone dictation removed
+- Speech recognition in the page: words shown live on the call screen, the answer sent after the pause, nothing heard in 10 s ends the turn
+- A language this iPhone can't recognise is remembered; OpenAI transcribes instead, or you type
+- Earlier "iPhone dictation" settings become Automatic
+- Tests: 07 rewritten, 08 updated (37 of 37 with the testkit)
+
+**Fixes**
+
+- Every answer in a call opened the iPhone dictation sheet, which waited for Done
+
 ## 1.16.0 (2026-11-13): Cancel in ClinicCards by changing the status
 
 - 🚫 **Marked cancelled there too**: Cancelling a visit in Frontly now changes its status to cancelled in ClinicCards, and checks that it took.
