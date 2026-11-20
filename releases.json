@@ -4,6 +4,36 @@
   "script": "Frontly.js",
   "releases": [
     {
+      "version": "1.17.1",
+      "date": "2026-11-20",
+      "title": "The microphone works in calls again",
+      "highlights": [
+        {
+          "icon": "🎙️",
+          "title": "Talk again",
+          "text": "Calls in the app listen again, hands-free: Frontly's page now gets the microphone from iOS."
+        },
+        {
+          "icon": "🛟",
+          "title": "A last resort",
+          "text": "If the page still can't use the microphone, iPhone dictation opens (tap Done), and Frontly says why."
+        },
+        {
+          "icon": "🔍",
+          "title": "Says what's missing",
+          "text": "Settings › How Reva hears you names what the page lacks, if anything."
+        }
+      ],
+      "changes": [
+        "The page is loaded at https://localhost/: iOS only gives a secure page the microphone",
+        "If the page still has no microphone, iPhone dictation is used, with a toast saying why",
+        "Tests: 33-page-microphone (38 of 38 with the testkit)"
+      ],
+      "fixes": [
+        "1.17.0 couldn't hear you in calls: the page had never had the microphone (it was loaded without an address), and with dictation gone nothing else could listen"
+      ]
+    },
+    {
       "version": "1.17.0",
       "date": "2026-11-20",
       "title": "Just talk: no dictation sheet",

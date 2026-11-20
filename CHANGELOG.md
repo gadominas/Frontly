@@ -2,6 +2,22 @@
 
 All notable changes to Frontly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.17.1 (2026-11-20): The microphone works in calls again
+
+- 🎙️ **Talk again**: Calls in the app listen again, hands-free: Frontly's page now gets the microphone from iOS.
+- 🛟 **A last resort**: If the page still can't use the microphone, iPhone dictation opens (tap Done), and Frontly says why.
+- 🔍 **Says what's missing**: Settings › How Reva hears you names what the page lacks, if anything.
+
+**Changes**
+
+- The page is loaded at https://localhost/: iOS only gives a secure page the microphone
+- If the page still has no microphone, iPhone dictation is used, with a toast saying why
+- Tests: 33-page-microphone (38 of 38 with the testkit)
+
+**Fixes**
+
+- 1.17.0 couldn't hear you in calls: the page had never had the microphone (it was loaded without an address), and with dictation gone nothing else could listen
+
 ## 1.17.0 (2026-11-20): Just talk: no dictation sheet
 
 - 🎙️ **No Done to press**: The iPhone dictation sheet is gone from calls. You talk, pause, and your answer goes by itself.
